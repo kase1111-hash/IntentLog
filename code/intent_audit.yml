@@ -1,0 +1,32 @@
+name: IntentLog Reasoning Audit
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+    branches: [ main ]
+
+jobs:
+  intent-audit:
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+
+      - name: Install dependencies
+        run: |
+          pip install -r requirements.txt
+          pip install pytest
+
+      - name: Run Tests & Capture Intent Logs
+        run: |
+          pytest tests/ > intent_audit.log 2>&1
+
+      - name: Run IntentLog Audit
+        run: |
+          python scripts/audit_intents.py intent_audit.log
