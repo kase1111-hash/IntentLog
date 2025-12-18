@@ -1,0 +1,13 @@
+include README.md
+include LICENSE.md
+include requirements.txt
+include pyproject.toml
+recursive-include src/intentlog *.py
+recursive-include tests *.py
+recursive-include docs *.md
+include Doctrine-of-intent.md
+include AI.md
+include Advanced-Use-Cases.md
+include Memory-Vault-Integration.md
+include Prior-Art.md
+include Your-Work-Isnt-Worthless.md
