@@ -14,33 +14,13 @@ IntentLog can integrate with Memory Vault for secure, classified storage of high
 
 **Status**: Implementation ready (see `src/intentlog/integrations/memory_vault.py`)
 
-**How it works**:
+**Overview**:
 - Low-value intents stored in local memory
 - High-value intents (classification ≥ 2) stored in Memory Vault
 - Automatic classification based on intent content
 - Full audit trail with tamper-proof Merkle trees
 
-**Setup**:
-```python
-from intentlog.integrations import MemoryVaultIntegration
-
-# Initialize integration
-vault_integration = MemoryVaultIntegration()
-
-# Store critical intent
-memory_id = vault_integration.store_critical_intent(
-    intent_id="abc-123",
-    content=b"Critical reasoning content",
-    classification=3,
-    metadata={"category": "strategic"}
-)
-
-# Recall with justification
-content = vault_integration.recall_critical_intent(
-    memory_id=memory_id,
-    justification="Reviewing strategic decision history"
-)
-```
+> **For detailed integration instructions, code examples, and classification mapping, see [Memory-Vault-Integration.md](Memory-Vault-Integration.md).**
 
 **Dependencies**:
 - Optional: `memory-vault` package
