@@ -69,11 +69,15 @@ Creative applications: Screenwriting teams tracking plot motivations; design sys
 
 Why This Matters Now
 
-AI systems need interpretable instruction histories: As we build increasingly capable agents, understanding how their guiding instructions evolved becomes essential for safety, alignment, and debugging.
-Distributed teams need shared context: Remote and asynchronous work amplifies the cost of lost rationale—IntentLog makes reasoning a durable team asset.
-We're entering an era of human-AI co-reasoning: Tools that preserve narrative intent will separate robust collaborative systems from brittle ones.
+In a world where AI can produce code, text, and designs in seconds, the scarce resource is no longer the artifact—it's the intentional human signal. By making prose the commit, IntentLog elevates the actual effort—deliberation, trade-offs, and the "why"—to first-class status. Everything else can be derived, regenerated, or reinterpreted, but original human reasoning stays intact and visible.
 
-IntentLog isn't about replacing Git—it's about augmenting it with the missing layer: legible, evolvable human reasoning. Start small, commit your why, and watch your project's collective intelligence compound over time.
+- **AI systems need interpretable instruction histories**: As we build increasingly capable agents, understanding how their guiding instructions evolved becomes essential for safety, alignment, and debugging.
+- **Distributed teams need shared context**: Remote and asynchronous work amplifies the cost of lost rationale—IntentLog makes reasoning a durable team asset.
+- **We're entering an era of human-AI co-reasoning**: Tools that preserve narrative intent will separate robust collaborative systems from brittle ones.
+
+Every commit is a breadcrumb of cognition. Every branch is an explored possibility. Every merge is a narrated reconciliation. As AI handles more of the "what," we need better tools for preserving and compounding the human "why."
+
+IntentLog isn't about replacing Git—it's about augmenting it with the missing layer: legible, evolvable human reasoning. It's a preservation system for collective intelligence. Start small, commit your why, and watch your project's collective intelligence compound over time.
 
 Open for collaboration. Prototype early 2026. Prior art timestamped December 16, 2025.
 License: Creative Commons Attribution-ShareAlike 4.0 International (CC BY-SA 4.0)
