@@ -25,6 +25,12 @@ from .storage import (
 )
 from .semantic import SemanticEngine, SemanticDiff, SemanticSearchResult, MergeResolution
 
+# Phase 4: Analytics and Metrics
+from .export import IntentExporter, ExportFilter, ExportFormat, AnonymizationConfig
+from .analytics import IntentAnalytics, AnalyticsReport, LatencyStats, FrequencyStats
+from .metrics import IntentMetrics, IntentDensity, AuditabilityScore, FraudResistance
+from .sufficiency import SufficiencyTest, SufficiencyReport, run_sufficiency_test
+
 __all__ = [
     "IntentLog",
     "Intent",
@@ -43,5 +49,21 @@ __all__ = [
     "SemanticDiff",
     "SemanticSearchResult",
     "MergeResolution",
+    # Phase 4: Analytics and Metrics
+    "IntentExporter",
+    "ExportFilter",
+    "ExportFormat",
+    "AnonymizationConfig",
+    "IntentAnalytics",
+    "AnalyticsReport",
+    "LatencyStats",
+    "FrequencyStats",
+    "IntentMetrics",
+    "IntentDensity",
+    "AuditabilityScore",
+    "FraudResistance",
+    "SufficiencyTest",
+    "SufficiencyReport",
+    "run_sufficiency_test",
     "__version__",
 ]
