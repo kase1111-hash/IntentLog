@@ -22,12 +22,11 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
 ]
-dependencies = [
-    "pytest>=7.4.0",
-]
+dependencies = []
 
 [project.optional-dependencies]
 dev = [
+    "pytest>=7.4.0",
     "pytest-cov>=4.1.0",
 ]
 
