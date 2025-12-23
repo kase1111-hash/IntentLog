@@ -313,7 +313,7 @@ Features from Advanced-Use-Cases.md for production deployments.
 | Context management | Thread-local/async storage for current intent | **Implemented** |
 | Eval set generation | Export intents as ground truth for evaluation | **Implemented** |
 | Latency tracking | Timestamp start/end for bottleneck discovery | **Implemented** |
-| Human-in-the-loop triggers | Show intent before sensitive operations | **Not Implemented** |
+| Human-in-the-loop triggers | Show intent before sensitive operations | **Implemented** |
 | Fine-tuning data pipeline | Filter logs for model training data | **Implemented** |
 | `session_id` context | Trace user journeys across sessions | **Implemented** |
 | Conditional logging levels | Granular vs high-level by environment | **Implemented** |
@@ -355,7 +355,6 @@ The following features are documented but not yet implemented:
 
 | Feature | Source | Files Needed | Description |
 |---------|--------|--------------|-------------|
-| HITL triggers | Advanced-Use-Cases.md | `triggers.py` | Show intent before sensitive ops |
 | LLM-based classification | INTEGRATION.md | `integrations/` | Replace keyword-based classification |
 
 ### Future/Infrastructure
@@ -817,8 +816,9 @@ This section provides a consolidated reference to all project documentation and 
 **Phase 6 Complete** - Analytics and metrics implemented.
 **Phase 7 Complete** - Privacy controls: encryption, access control, revocation (MP-02 §12).
 **Phase 8 Complete** - Deferred formalization: prose to code/rules/heuristics.
+**Phase 9 Complete** - Human-in-the-loop triggers for sensitive operations.
 
-**Total: 412 tests passing** (383 previous + 29 formalization)
+**Total: 466 tests passing** (412 previous + 54 HITL triggers)
 
 ### New CLI Commands (Phase 2)
 
@@ -836,9 +836,8 @@ This section provides a consolidated reference to all project documentation and 
 
 The following features are documented across project documentation but have no implementation:
 
-1. **HITL triggers** - No human-in-the-loop integration
-2. **LLM-based classification** - Only keyword-based classification exists
-3. **External anchoring** - No Bitcoin/Ethereum timestamping
+1. **LLM-based classification** - Only keyword-based classification exists
+2. **External anchoring** - No Bitcoin/Ethereum timestamping
 
 ---
 
@@ -948,6 +947,23 @@ The following features are documented across project documentation but have no i
 - **Prompt Templates** - Type-specific templates for code, rules, heuristics, schema, config, spec, tests
 - **CLI Command** - `ilog formalize <intent|chain|search> --type <type> --language <lang>`
 
+**Phase 9 - Human-in-the-Loop Triggers:**
+- **Trigger Types** - NOTIFICATION, CONFIRMATION, APPROVAL, REVIEW
+- **Trigger Responses** - APPROVED, DENIED, MODIFIED, TIMEOUT, ESCALATED, SKIPPED
+- **Sensitivity Levels** - LOW, MEDIUM, HIGH, CRITICAL
+- **TriggerRequest/Result** - Full request/response dataclasses with serialization
+- **ConsoleTriggerHandler** - CLI-based approval with auto-approve mode
+- **CallbackTriggerHandler** - Custom UI integration via callbacks
+- **require_human_approval()** - Primary API for HITL triggers
+- **notify_human()** - Non-blocking notifications
+- **@requires_approval decorator** - Function-level approval requirement
+- **@requires_confirmation decorator** - Simple confirmation trigger
+- **@requires_review decorator** - Review with modification support
+- **TriggerScope context manager** - Block-level trigger scopes
+- **CommonTriggers** - Predefined triggers: database_write, email_send, payment_processing
+- **Trigger History** - Full audit trail of all HITL interactions
+- **Intent Integration** - Triggers capture current intent context
+
 **Test Coverage:**
 - `test_storage.py`: 27 tests for storage module
 - `test_cli_integration.py`: 21 tests for CLI end-to-end
@@ -961,7 +977,8 @@ The following features are documented across project documentation but have no i
 - `test_phase5.py`: 80 tests for decorator, context, and extended features
 - `test_privacy.py`: 47 tests for privacy controls
 - `test_formalization.py`: 29 tests for deferred formalization
-- **Total: 412 tests passing**
+- `test_triggers.py`: 54 tests for HITL triggers
+- **Total: 466 tests passing**
 
 ### Known Issues
 
