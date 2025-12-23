@@ -119,6 +119,25 @@ from .decorator import (
     trace,
 )
 
+# Phase 6: Privacy Controls (MP-02 Section 12)
+from .privacy import (
+    PrivacyLevel,
+    AccessPolicy,
+    EncryptionKey,
+    EncryptedContent,
+    IntentEncryptor,
+    EncryptionKeyManager,
+    RevocationRecord,
+    RevocationManager,
+    PrivacyManager,
+    PrivacyError,
+    EncryptionError,
+    AccessDeniedError,
+    KeyManagementError,
+    RevocationError,
+    ENCRYPTION_AVAILABLE,
+)
+
 __all__ = [
     "IntentLog",
     "Intent",
@@ -216,5 +235,21 @@ __all__ = [
     "clear_intent_log",
     "log_intent",
     "trace",
+    # Phase 6: Privacy Controls
+    "PrivacyLevel",
+    "AccessPolicy",
+    "EncryptionKey",
+    "EncryptedContent",
+    "IntentEncryptor",
+    "EncryptionKeyManager",
+    "RevocationRecord",
+    "RevocationManager",
+    "PrivacyManager",
+    "PrivacyError",
+    "EncryptionError",
+    "AccessDeniedError",
+    "KeyManagementError",
+    "RevocationError",
+    "ENCRYPTION_AVAILABLE",
     "__version__",
 ]

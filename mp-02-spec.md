@@ -301,7 +301,7 @@ Components defined in MP-02 specification sections 4-12.
 | Ledger anchoring | Section 9 | Append-only, time-ordered log | **Implemented** |
 | Third-party verification | Section 10 | Recompute hashes, verify inclusion | **Implemented** |
 | Failure mode recording | Section 11 | Track gaps, conflicts, manipulation | **Implemented** |
-| Privacy controls | Section 12 | Encryption, access control, revocation | **Not Implemented** (planned) |
+| Privacy controls | Section 12 | Encryption, access control, revocation | **Implemented** |
 
 ### Category D: Advanced Use Cases (Priority: Medium)
 
@@ -355,7 +355,6 @@ The following features are documented but not yet implemented:
 
 | Feature | Source | Files Needed | Description |
 |---------|--------|--------------|-------------|
-| Privacy controls | MP-02 §12 | `privacy.py` | Encryption, access control, revocation |
 | Deferred formalization | README.md | `semantic.py` | LLM derives code/rules from prose |
 
 ### Medium Priority (Advanced Features)
@@ -822,8 +821,9 @@ This section provides a consolidated reference to all project documentation and 
 **Phase 4 Complete** - MP-02 Protocol components implemented.
 **Phase 5 Complete** - `@intent_logger` decorator, context management, session tracking.
 **Phase 6 Complete** - Analytics and metrics implemented.
+**Phase 7 Complete** - Privacy controls: encryption, access control, revocation (MP-02 §12).
 
-**Total: 336 tests passing** (300 Phase 5 base + 36 extended context features)
+**Total: 383 tests passing** (336 previous + 47 privacy controls)
 
 ### New CLI Commands (Phase 2)
 
@@ -841,11 +841,10 @@ This section provides a consolidated reference to all project documentation and 
 
 The following features are documented across project documentation but have no implementation:
 
-1. **Privacy controls** - No encryption, access control, or revocation
-2. **Deferred formalization** - LLM-derived code from prose not implemented
-3. **HITL triggers** - No human-in-the-loop integration
-4. **LLM-based classification** - Only keyword-based classification exists
-5. **External anchoring** - No Bitcoin/Ethereum timestamping
+1. **Deferred formalization** - LLM-derived code from prose not implemented
+2. **HITL triggers** - No human-in-the-loop integration
+3. **LLM-based classification** - Only keyword-based classification exists
+4. **External anchoring** - No Bitcoin/Ethereum timestamping
 
 ---
 
@@ -933,6 +932,17 @@ The following features are documented across project documentation but have no i
 - **Query Functions** - `get_root_context()`, `get_trace_id()`, `get_span_id()`, `has_tag_in_chain()`
 - **Decorators** - `@with_tags()` and `@with_labels()` for context annotation
 
+**Phase 7 - Privacy Controls (MP-02 Section 12):**
+- **Encryption Module** - Fernet (AES-128-CBC with HMAC) symmetric encryption (`privacy.py`)
+- **PrivacyLevel** - PUBLIC, INTERNAL, CONFIDENTIAL, SECRET, TOP_SECRET levels
+- **AccessPolicy** - Read, write, admin permissions with user access lists
+- **EncryptionKey** - Key generation, password derivation (PBKDF2), expiration
+- **IntentEncryptor** - Encrypt/decrypt intent fields (reasoning, metadata)
+- **EncryptionKeyManager** - Store keys in .intentlog/keys/encryption/
+- **RevocationRecord** - Track revocations per MP-02 Section 12
+- **RevocationManager** - Revoke observation, intents, sessions, users
+- **PrivacyManager** - High-level API combining encryption, access, revocation
+
 **Test Coverage:**
 - `test_storage.py`: 27 tests for storage module
 - `test_cli_integration.py`: 21 tests for CLI end-to-end
@@ -944,7 +954,8 @@ The following features are documented across project documentation but have no i
 - `test_phase2.py`: 53 tests for cryptographic integrity
 - `test_phase4.py`: 45 tests for analytics and metrics
 - `test_phase5.py`: 80 tests for decorator, context, and extended features
-- **Total: 336 tests passing**
+- `test_privacy.py`: 47 tests for privacy controls
+- **Total: 383 tests passing**
 
 ### Known Issues
 
