@@ -23,7 +23,16 @@ from .storage import (
     BranchNotFoundError,
     BranchExistsError,
 )
-from .semantic import SemanticEngine, SemanticDiff, SemanticSearchResult, MergeResolution
+from .semantic import (
+    SemanticEngine,
+    SemanticDiff,
+    SemanticSearchResult,
+    MergeResolution,
+    # Deferred Formalization
+    FormalizationType,
+    FormalizedOutput,
+    ProvenanceRecord,
+)
 
 # Phase 2: Cryptographic Integrity
 from .merkle import (
@@ -156,6 +165,10 @@ __all__ = [
     "SemanticDiff",
     "SemanticSearchResult",
     "MergeResolution",
+    # Deferred Formalization
+    "FormalizationType",
+    "FormalizedOutput",
+    "ProvenanceRecord",
     # Phase 2: Cryptographic Integrity
     "ChainedIntent",
     "MerkleChain",

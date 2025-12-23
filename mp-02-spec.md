@@ -282,7 +282,7 @@ Features requiring LLM integration.
 |---------|--------|-------------|--------|
 | Semantic diffs | README.md | LLM-generated human-readable change summaries | **Implemented** |
 | Semantic search | README.md | Query reasoning with natural language | **Implemented** |
-| Deferred formalization | README.md | LLM derives code/rules from prose on demand | **Not Implemented** |
+| Deferred formalization | README.md | LLM derives code/rules from prose on demand | **Implemented** |
 | Automated classification | INTEGRATION.md | LLM-based intent classification | **Partial** (keyword-based only) |
 | Conflict resolution via LLM | INTEGRATION.md | LLM-assisted merge reasoning | **Implemented** |
 | Pluggable LLM backends | README.md | Support OpenAI, Anthropic, local models | **Implemented** |
@@ -350,12 +350,6 @@ Long-term infrastructure improvements from INTEGRATION.md.
 ## Unimplemented Features Summary
 
 The following features are documented but not yet implemented:
-
-### High Priority (Core Functionality Gaps)
-
-| Feature | Source | Files Needed | Description |
-|---------|--------|--------------|-------------|
-| Deferred formalization | README.md | `semantic.py` | LLM derives code/rules from prose |
 
 ### Medium Priority (Advanced Features)
 
@@ -822,8 +816,9 @@ This section provides a consolidated reference to all project documentation and 
 **Phase 5 Complete** - `@intent_logger` decorator, context management, session tracking.
 **Phase 6 Complete** - Analytics and metrics implemented.
 **Phase 7 Complete** - Privacy controls: encryption, access control, revocation (MP-02 §12).
+**Phase 8 Complete** - Deferred formalization: prose to code/rules/heuristics.
 
-**Total: 383 tests passing** (336 previous + 47 privacy controls)
+**Total: 412 tests passing** (383 previous + 29 formalization)
 
 ### New CLI Commands (Phase 2)
 
@@ -841,10 +836,9 @@ This section provides a consolidated reference to all project documentation and 
 
 The following features are documented across project documentation but have no implementation:
 
-1. **Deferred formalization** - LLM-derived code from prose not implemented
-2. **HITL triggers** - No human-in-the-loop integration
-3. **LLM-based classification** - Only keyword-based classification exists
-4. **External anchoring** - No Bitcoin/Ethereum timestamping
+1. **HITL triggers** - No human-in-the-loop integration
+2. **LLM-based classification** - Only keyword-based classification exists
+3. **External anchoring** - No Bitcoin/Ethereum timestamping
 
 ---
 
@@ -897,6 +891,7 @@ The following features are documented across project documentation but have no i
 - `ilog analytics` - Generate analytics reports (summary, latency, frequency, etc.)
 - `ilog metrics` - Compute doctrine metrics (density, auditability, fraud resistance)
 - `ilog sufficiency` - Run Intent Sufficiency Test
+- `ilog formalize <intent|chain|search>` - Derive code/rules/heuristics from prose (Deferred Formalization)
 
 **Phase 4 - Analytics & Metrics:**
 - **Export Module** - IntentExporter, ExportFilter, ExportFormat, AnonymizationConfig (`export.py`)
@@ -943,6 +938,16 @@ The following features are documented across project documentation but have no i
 - **RevocationManager** - Revoke observation, intents, sessions, users
 - **PrivacyManager** - High-level API combining encryption, access, revocation
 
+**Phase 8 - Deferred Formalization:**
+- **FormalizationType Enum** - CODE, RULES, HEURISTICS, SCHEMA, CONFIG, SPEC, TESTS output types
+- **FormalizedOutput** - Result container with content, explanation, provenance, confidence, warnings
+- **ProvenanceRecord** - Track source intent chain with full traceability
+- **formalize()** - Derive formal output from single intent with LLM
+- **formalize_chain()** - Synthesize formal output from intent evolution chain
+- **formalize_from_search()** - Search and formalize matching intents
+- **Prompt Templates** - Type-specific templates for code, rules, heuristics, schema, config, spec, tests
+- **CLI Command** - `ilog formalize <intent|chain|search> --type <type> --language <lang>`
+
 **Test Coverage:**
 - `test_storage.py`: 27 tests for storage module
 - `test_cli_integration.py`: 21 tests for CLI end-to-end
@@ -955,7 +960,8 @@ The following features are documented across project documentation but have no i
 - `test_phase4.py`: 45 tests for analytics and metrics
 - `test_phase5.py`: 80 tests for decorator, context, and extended features
 - `test_privacy.py`: 47 tests for privacy controls
-- **Total: 383 tests passing**
+- `test_formalization.py`: 29 tests for deferred formalization
+- **Total: 412 tests passing**
 
 ### Known Issues
 
