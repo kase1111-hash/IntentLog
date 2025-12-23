@@ -187,49 +187,95 @@ def cmd_search(args):
     """Search intent history"""
     query = args.query
     branch = getattr(args, 'branch', None)
+    semantic = getattr(args, 'semantic', False)
+    top_k = getattr(args, 'top', 5)
 
     storage = IntentLogStorage()
 
     try:
         config = storage.load_config()
         branch = branch or config.current_branch
-        results = storage.search_intents(query, branch)
     except ProjectNotFoundError as e:
         print(f"Error: {e}")
         sys.exit(1)
-    except BranchNotFoundError as e:
-        print(f"Error: {e}")
-        sys.exit(1)
 
-    if not results:
-        print(f"No intents matching '{query}' on branch '{branch}'")
-        return
+    if semantic:
+        # Semantic search using embeddings
+        if not config.llm.is_configured():
+            print("Error: LLM not configured for semantic search.")
+            print("Configure with: ilog config llm --provider openai")
+            print("Or use text search without --semantic flag.")
+            sys.exit(1)
 
-    print(f"Found {len(results)} intent(s) matching '{query}':\n")
+        try:
+            engine = _get_semantic_engine(storage)
+            intents = storage.load_intents(branch)
+            results = engine.semantic_search(query, intents, top_k=top_k)
+        except Exception as e:
+            print(f"Error during semantic search: {e}")
+            sys.exit(1)
 
-    for intent in results:
-        intent_hash = compute_intent_hash(intent)
-        timestamp = intent.timestamp
-        if isinstance(timestamp, datetime):
-            timestamp = timestamp.strftime("%Y-%m-%d %H:%M")
+        if not results:
+            print(f"No intents semantically matching '{query}'")
+            return
 
-        print(f"[{intent_hash}] {timestamp}")
-        print(f"  {intent.intent_name}")
+        print(f"Semantic search results for '{query}' (top {len(results)}):\n")
 
-        # Highlight matching content in reasoning
-        reasoning = intent.intent_reasoning
-        if len(reasoning) > 150:
-            # Try to show context around match
-            query_lower = query.lower()
-            idx = reasoning.lower().find(query_lower)
-            if idx != -1:
-                start = max(0, idx - 50)
-                end = min(len(reasoning), idx + len(query) + 50)
-                reasoning = "..." + reasoning[start:end] + "..."
-            else:
+        for result in results:
+            intent = result.intent
+            intent_hash = compute_intent_hash(intent)
+            timestamp = intent.timestamp
+            if isinstance(timestamp, datetime):
+                timestamp = timestamp.strftime("%Y-%m-%d %H:%M")
+
+            score_pct = int(result.score * 100)
+            print(f"[{intent_hash}] {timestamp} ({score_pct}% match)")
+            print(f"  {intent.intent_name}")
+
+            reasoning = intent.intent_reasoning
+            if len(reasoning) > 150:
                 reasoning = reasoning[:147] + "..."
-        print(f"  {reasoning}")
-        print()
+            print(f"  {reasoning}")
+            print()
+    else:
+        # Standard text search
+        try:
+            results = storage.search_intents(query, branch)
+        except BranchNotFoundError as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+
+        if not results:
+            print(f"No intents matching '{query}' on branch '{branch}'")
+            if config.llm.is_configured():
+                print("(Try --semantic for meaning-based search)")
+            return
+
+        print(f"Found {len(results)} intent(s) matching '{query}':\n")
+
+        for intent in results:
+            intent_hash = compute_intent_hash(intent)
+            timestamp = intent.timestamp
+            if isinstance(timestamp, datetime):
+                timestamp = timestamp.strftime("%Y-%m-%d %H:%M")
+
+            print(f"[{intent_hash}] {timestamp}")
+            print(f"  {intent.intent_name}")
+
+            # Highlight matching content in reasoning
+            reasoning = intent.intent_reasoning
+            if len(reasoning) > 150:
+                # Try to show context around match
+                query_lower = query.lower()
+                idx = reasoning.lower().find(query_lower)
+                if idx != -1:
+                    start = max(0, idx - 50)
+                    end = min(len(reasoning), idx + len(query) + 50)
+                    reasoning = "..." + reasoning[start:end] + "..."
+                else:
+                    reasoning = reasoning[:147] + "..."
+            print(f"  {reasoning}")
+            print()
 
 
 def cmd_audit(args):
@@ -261,6 +307,235 @@ def cmd_status(args):
     print(f"Branch:  {config.current_branch}")
     print(f"Intents: {len(intents)}")
     print(f"Branches: {len(branches)} ({', '.join(branches)})")
+
+    # Show LLM config if set
+    if config.llm.is_configured():
+        print(f"LLM:     {config.llm.provider} ({config.llm.model or 'default'})")
+
+
+def _get_semantic_engine(storage: IntentLogStorage):
+    """Get semantic engine from project config"""
+    from .llm.provider import LLMConfig
+    from .llm.registry import get_provider
+    from .semantic import SemanticEngine
+
+    config = storage.load_config()
+
+    if not config.llm.is_configured():
+        print("Error: LLM not configured. Run 'ilog config llm' first.")
+        sys.exit(1)
+
+    llm_config = LLMConfig(
+        provider=config.llm.provider,
+        model=config.llm.model,
+        api_key_env=config.llm.api_key_env or f"{config.llm.provider.upper()}_API_KEY",
+        base_url=config.llm.base_url or None,
+    )
+
+    try:
+        provider = get_provider(llm_config)
+        if not provider.is_available():
+            print(f"Error: LLM provider '{config.llm.provider}' not available.")
+            print(f"Check that {llm_config.api_key_env} is set.")
+            sys.exit(1)
+    except Exception as e:
+        print(f"Error initializing LLM: {e}")
+        sys.exit(1)
+
+    # Get embedding provider (may be different)
+    embedding_provider = provider
+    if config.llm.embedding_provider:
+        embed_config = LLMConfig(
+            provider=config.llm.embedding_provider,
+            model=config.llm.embedding_model,
+            api_key_env=f"{config.llm.embedding_provider.upper()}_API_KEY",
+        )
+        try:
+            embedding_provider = get_provider(embed_config)
+        except Exception:
+            pass  # Fall back to main provider
+
+    cache_dir = storage.intentlog_dir / "cache"
+    return SemanticEngine(provider, embedding_provider, cache_dir)
+
+
+def cmd_diff(args):
+    """Show semantic diff between branches"""
+    branch_spec = args.branches
+    storage = IntentLogStorage()
+
+    try:
+        config = storage.load_config()
+    except ProjectNotFoundError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+    # Parse branch spec (e.g., "main..feature" or "feature")
+    if ".." in branch_spec:
+        branch_a, branch_b = branch_spec.split("..", 1)
+    else:
+        branch_a = "main"
+        branch_b = branch_spec
+
+    try:
+        intents_a = storage.load_intents(branch_a)
+        intents_b = storage.load_intents(branch_b)
+    except BranchNotFoundError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+    # Check if LLM is configured
+    if not config.llm.is_configured():
+        # Fall back to simple diff
+        print(f"Comparing '{branch_a}' ({len(intents_a)} intents) to '{branch_b}' ({len(intents_b)} intents)\n")
+
+        a_ids = {i.intent_id for i in intents_a}
+        b_ids = {i.intent_id for i in intents_b}
+
+        new_in_b = [i for i in intents_b if i.intent_id not in a_ids]
+        if new_in_b:
+            print(f"New in '{branch_b}':")
+            for intent in new_in_b:
+                intent_hash = compute_intent_hash(intent)
+                print(f"  + [{intent_hash}] {intent.intent_name}")
+        else:
+            print("No new intents.")
+
+        print("\n(Configure LLM for semantic analysis: ilog config llm)")
+        return
+
+    # Use semantic diff
+    try:
+        engine = _get_semantic_engine(storage)
+    except SystemExit:
+        return
+
+    print(f"Analyzing changes from '{branch_a}' to '{branch_b}'...\n")
+
+    diffs = engine.diff_branches(intents_a, intents_b, branch_a, branch_b)
+
+    if not diffs:
+        a_ids = {i.intent_id for i in intents_a}
+        new_intents = [i for i in intents_b if i.intent_id not in a_ids]
+        if new_intents:
+            print(f"New intents in '{branch_b}':")
+            for intent in new_intents:
+                intent_hash = compute_intent_hash(intent)
+                print(f"  + [{intent_hash}] {intent.intent_name}")
+                print(f"    {intent.intent_reasoning[:100]}...")
+        else:
+            print("No significant changes between branches.")
+        return
+
+    for diff in diffs:
+        print(f"Change: {diff.summary}")
+        if diff.changes:
+            for change in diff.changes:
+                print(f"  - {change}")
+        print()
+
+
+def cmd_merge(args):
+    """Merge branches with LLM-assisted conflict resolution"""
+    source_branch = args.source
+    message = getattr(args, 'message', None)
+
+    storage = IntentLogStorage()
+
+    try:
+        config = storage.load_config()
+        target_branch = config.current_branch
+        source_intents = storage.load_intents(source_branch)
+        target_intents = storage.load_intents(target_branch)
+    except ProjectNotFoundError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+    except BranchNotFoundError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+    # Find new intents in source
+    target_ids = {i.intent_id for i in target_intents}
+    new_intents = [i for i in source_intents if i.intent_id not in target_ids]
+
+    if not new_intents:
+        print(f"Already up to date with '{source_branch}'.")
+        return
+
+    print(f"Merging {len(new_intents)} intent(s) from '{source_branch}' into '{target_branch}'...")
+
+    # Add new intents to target
+    for intent in new_intents:
+        target_intents.append(intent)
+
+    storage.save_intents(target_intents, target_branch)
+
+    # Create merge commit if message provided
+    if message:
+        merge_intent = storage.add_intent(
+            name=f"Merge {source_branch}",
+            reasoning=message,
+            metadata={"merge_from": source_branch, "merged_count": len(new_intents)},
+            branch=target_branch,
+        )
+        merge_hash = compute_intent_hash(merge_intent)
+        print(f"[{merge_hash}] Merge commit created")
+
+    print(f"Merged {len(new_intents)} intent(s) from '{source_branch}'")
+
+
+def cmd_config(args):
+    """Configure IntentLog settings"""
+    setting = args.setting
+    storage = IntentLogStorage()
+
+    try:
+        config = storage.load_config()
+    except ProjectNotFoundError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+    if setting == "llm":
+        # Configure LLM
+        provider = getattr(args, 'provider', None)
+        model = getattr(args, 'model', None)
+
+        if not provider:
+            # Show current config
+            if config.llm.is_configured():
+                print(f"LLM Provider: {config.llm.provider}")
+                print(f"Model: {config.llm.model or '(default)'}")
+                if config.llm.api_key_env:
+                    print(f"API Key Env: {config.llm.api_key_env}")
+            else:
+                print("LLM not configured.")
+                print("\nAvailable providers: openai, anthropic, ollama")
+                print("Example: ilog config llm --provider openai --model gpt-4o-mini")
+            return
+
+        # Update config
+        from .storage import LLMSettings
+        config.llm = LLMSettings(
+            provider=provider,
+            model=model or "",
+            api_key_env=getattr(args, 'api_key_env', "") or f"{provider.upper()}_API_KEY",
+            embedding_provider=getattr(args, 'embedding_provider', "") or "",
+            embedding_model=getattr(args, 'embedding_model', "") or "",
+        )
+        storage.save_config(config)
+        print(f"LLM configured: {provider} ({model or 'default'})")
+
+    elif setting == "show":
+        # Show all config
+        print(f"Project: {config.project_name}")
+        print(f"Created: {config.created_at}")
+        print(f"Branch: {config.current_branch}")
+        print(f"Version: {config.version}")
+        if config.llm.is_configured():
+            print(f"LLM: {config.llm.provider} ({config.llm.model or 'default'})")
+    else:
+        print(f"Unknown setting: {setting}")
+        print("Available: llm, show")
 
 
 def main():
@@ -307,6 +582,10 @@ def main():
     search_parser = subparsers.add_parser("search", help="Search intent history")
     search_parser.add_argument("query", help="Search query")
     search_parser.add_argument("--branch", "-b", help="Search in specific branch")
+    search_parser.add_argument("--semantic", "-s", action="store_true",
+                               help="Use semantic (meaning-based) search with LLM embeddings")
+    search_parser.add_argument("--top", "-t", type=int, default=5,
+                               help="Number of results for semantic search (default: 5)")
     search_parser.set_defaults(func=cmd_search)
 
     # audit command
@@ -317,6 +596,27 @@ def main():
     # status command
     status_parser = subparsers.add_parser("status", help="Show project status")
     status_parser.set_defaults(func=cmd_status)
+
+    # diff command
+    diff_parser = subparsers.add_parser("diff", help="Show semantic diff between branches")
+    diff_parser.add_argument("branches", help="Branch comparison (e.g., 'main..feature' or 'feature')")
+    diff_parser.set_defaults(func=cmd_diff)
+
+    # merge command
+    merge_parser = subparsers.add_parser("merge", help="Merge branches")
+    merge_parser.add_argument("source", help="Source branch to merge from")
+    merge_parser.add_argument("--message", "-m", help="Merge commit message")
+    merge_parser.set_defaults(func=cmd_merge)
+
+    # config command
+    config_parser = subparsers.add_parser("config", help="Configure IntentLog settings")
+    config_parser.add_argument("setting", help="Setting to configure (llm, show)")
+    config_parser.add_argument("--provider", help="LLM provider (openai, anthropic, ollama)")
+    config_parser.add_argument("--model", help="Model name")
+    config_parser.add_argument("--api-key-env", help="Environment variable for API key")
+    config_parser.add_argument("--embedding-provider", help="Provider for embeddings")
+    config_parser.add_argument("--embedding-model", help="Embedding model name")
+    config_parser.set_defaults(func=cmd_config)
 
     args = parser.parse_args()
 
