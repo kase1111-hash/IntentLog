@@ -282,8 +282,8 @@ Features requiring LLM integration.
 |---------|--------|-------------|--------|
 | Semantic diffs | README.md | LLM-generated human-readable change summaries | **Implemented** |
 | Semantic search | README.md | Query reasoning with natural language | **Implemented** |
-| Deferred formalization | README.md | LLM derives code/rules from prose on demand | **Not Implemented** |
-| Automated classification | INTEGRATION.md | LLM-based intent classification | **Partial** (keyword-based only) |
+| Deferred formalization | README.md | LLM derives code/rules from prose on demand | **Implemented** |
+| Automated classification | INTEGRATION.md | LLM-based intent classification | **Implemented** |
 | Conflict resolution via LLM | INTEGRATION.md | LLM-assisted merge reasoning | **Implemented** |
 | Pluggable LLM backends | README.md | Support OpenAI, Anthropic, local models | **Implemented** |
 | Embedding caching | Plan 3 | Persistent cache for embeddings | **Implemented** |
@@ -313,7 +313,7 @@ Features from Advanced-Use-Cases.md for production deployments.
 | Context management | Thread-local/async storage for current intent | **Implemented** |
 | Eval set generation | Export intents as ground truth for evaluation | **Implemented** |
 | Latency tracking | Timestamp start/end for bottleneck discovery | **Implemented** |
-| Human-in-the-loop triggers | Show intent before sensitive operations | **Not Implemented** |
+| Human-in-the-loop triggers | Show intent before sensitive operations | **Implemented** |
 | Fine-tuning data pipeline | Filter logs for model training data | **Implemented** |
 | `session_id` context | Trace user journeys across sessions | **Implemented** |
 | Conditional logging levels | Granular vs high-level by environment | **Implemented** |
@@ -350,19 +350,6 @@ Long-term infrastructure improvements from INTEGRATION.md.
 ## Unimplemented Features Summary
 
 The following features are documented but not yet implemented:
-
-### High Priority (Core Functionality Gaps)
-
-| Feature | Source | Files Needed | Description |
-|---------|--------|--------------|-------------|
-| Deferred formalization | README.md | `semantic.py` | LLM derives code/rules from prose |
-
-### Medium Priority (Advanced Features)
-
-| Feature | Source | Files Needed | Description |
-|---------|--------|--------------|-------------|
-| HITL triggers | Advanced-Use-Cases.md | `triggers.py` | Show intent before sensitive ops |
-| LLM-based classification | INTEGRATION.md | `integrations/` | Replace keyword-based classification |
 
 ### Future/Infrastructure
 
@@ -822,8 +809,11 @@ This section provides a consolidated reference to all project documentation and 
 **Phase 5 Complete** - `@intent_logger` decorator, context management, session tracking.
 **Phase 6 Complete** - Analytics and metrics implemented.
 **Phase 7 Complete** - Privacy controls: encryption, access control, revocation (MP-02 §12).
+**Phase 8 Complete** - Deferred formalization: prose to code/rules/heuristics.
+**Phase 9 Complete** - Human-in-the-loop triggers for sensitive operations.
+**Phase 10 Complete** - LLM-based semantic classification for intents.
 
-**Total: 383 tests passing** (336 previous + 47 privacy controls)
+**Total: 501 tests passing** (466 previous + 35 LLM classifier)
 
 ### New CLI Commands (Phase 2)
 
@@ -841,10 +831,7 @@ This section provides a consolidated reference to all project documentation and 
 
 The following features are documented across project documentation but have no implementation:
 
-1. **Deferred formalization** - LLM-derived code from prose not implemented
-2. **HITL triggers** - No human-in-the-loop integration
-3. **LLM-based classification** - Only keyword-based classification exists
-4. **External anchoring** - No Bitcoin/Ethereum timestamping
+1. **External anchoring** - No Bitcoin/Ethereum timestamping (future infrastructure)
 
 ---
 
@@ -897,6 +884,7 @@ The following features are documented across project documentation but have no i
 - `ilog analytics` - Generate analytics reports (summary, latency, frequency, etc.)
 - `ilog metrics` - Compute doctrine metrics (density, auditability, fraud resistance)
 - `ilog sufficiency` - Run Intent Sufficiency Test
+- `ilog formalize <intent|chain|search>` - Derive code/rules/heuristics from prose (Deferred Formalization)
 
 **Phase 4 - Analytics & Metrics:**
 - **Export Module** - IntentExporter, ExportFilter, ExportFormat, AnonymizationConfig (`export.py`)
@@ -943,6 +931,45 @@ The following features are documented across project documentation but have no i
 - **RevocationManager** - Revoke observation, intents, sessions, users
 - **PrivacyManager** - High-level API combining encryption, access, revocation
 
+**Phase 8 - Deferred Formalization:**
+- **FormalizationType Enum** - CODE, RULES, HEURISTICS, SCHEMA, CONFIG, SPEC, TESTS output types
+- **FormalizedOutput** - Result container with content, explanation, provenance, confidence, warnings
+- **ProvenanceRecord** - Track source intent chain with full traceability
+- **formalize()** - Derive formal output from single intent with LLM
+- **formalize_chain()** - Synthesize formal output from intent evolution chain
+- **formalize_from_search()** - Search and formalize matching intents
+- **Prompt Templates** - Type-specific templates for code, rules, heuristics, schema, config, spec, tests
+- **CLI Command** - `ilog formalize <intent|chain|search> --type <type> --language <lang>`
+
+**Phase 9 - Human-in-the-Loop Triggers:**
+- **Trigger Types** - NOTIFICATION, CONFIRMATION, APPROVAL, REVIEW
+- **Trigger Responses** - APPROVED, DENIED, MODIFIED, TIMEOUT, ESCALATED, SKIPPED
+- **Sensitivity Levels** - LOW, MEDIUM, HIGH, CRITICAL
+- **TriggerRequest/Result** - Full request/response dataclasses with serialization
+- **ConsoleTriggerHandler** - CLI-based approval with auto-approve mode
+- **CallbackTriggerHandler** - Custom UI integration via callbacks
+- **require_human_approval()** - Primary API for HITL triggers
+- **notify_human()** - Non-blocking notifications
+- **@requires_approval decorator** - Function-level approval requirement
+- **@requires_confirmation decorator** - Simple confirmation trigger
+- **@requires_review decorator** - Review with modification support
+- **TriggerScope context manager** - Block-level trigger scopes
+- **CommonTriggers** - Predefined triggers: database_write, email_send, payment_processing
+- **Trigger History** - Full audit trail of all HITL interactions
+- **Intent Integration** - Triggers capture current intent context
+
+**Phase 10 - LLM-Based Classification:**
+- **IntentCategory Enum** - transient, learned, failure, strategic, critical, architecture, security, compliance, performance, ux
+- **ClassificationResult** - Full result with category, confidence, level, reasoning, sensitivity, retention priority
+- **LLMIntentClassifier** - Semantic classification engine using LLM understanding
+- **classify()** - Classify intent by name and reasoning
+- **classify_intent()** - Classify Intent object directly
+- **batch_classify()** - Classify multiple intents
+- **Keyword Fallback** - Falls back to keyword matching if LLM fails
+- **Memory Vault Integration** - get_memory_vault_level(), should_persist(), should_use_vault()
+- **Classification Caching** - Optional caching of classification results
+- **classify_intent_with_llm()** - Convenience function for one-off classification
+
 **Test Coverage:**
 - `test_storage.py`: 27 tests for storage module
 - `test_cli_integration.py`: 21 tests for CLI end-to-end
@@ -955,7 +982,10 @@ The following features are documented across project documentation but have no i
 - `test_phase4.py`: 45 tests for analytics and metrics
 - `test_phase5.py`: 80 tests for decorator, context, and extended features
 - `test_privacy.py`: 47 tests for privacy controls
-- **Total: 383 tests passing**
+- `test_formalization.py`: 29 tests for deferred formalization
+- `test_triggers.py`: 54 tests for HITL triggers
+- `test_llm_classifier.py`: 35 tests for LLM classification
+- **Total: 501 tests passing**
 
 ### Known Issues
 

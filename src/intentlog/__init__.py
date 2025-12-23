@@ -23,7 +23,16 @@ from .storage import (
     BranchNotFoundError,
     BranchExistsError,
 )
-from .semantic import SemanticEngine, SemanticDiff, SemanticSearchResult, MergeResolution
+from .semantic import (
+    SemanticEngine,
+    SemanticDiff,
+    SemanticSearchResult,
+    MergeResolution,
+    # Deferred Formalization
+    FormalizationType,
+    FormalizedOutput,
+    ProvenanceRecord,
+)
 
 # Phase 2: Cryptographic Integrity
 from .merkle import (
@@ -119,6 +128,37 @@ from .decorator import (
     trace,
 )
 
+# Phase 9: Human-in-the-Loop Triggers
+from .triggers import (
+    TriggerType,
+    TriggerResponse,
+    SensitivityLevel,
+    TriggerRequest,
+    TriggerResult,
+    TriggerDeniedError,
+    TriggerTimeoutError,
+    TriggerHandlerBase,
+    ConsoleTriggerHandler,
+    CallbackTriggerHandler,
+    set_trigger_handler,
+    get_trigger_handler,
+    get_trigger_history,
+    clear_trigger_history,
+    require_human_approval,
+    notify_human,
+    requires_approval,
+    requires_confirmation,
+    requires_review,
+    TriggerScope,
+    sensitive_operation,
+    CommonTriggers,
+    database_write,
+    email_send,
+    external_api_call,
+    file_operation,
+    payment_processing,
+)
+
 # Phase 6: Privacy Controls (MP-02 Section 12)
 from .privacy import (
     PrivacyLevel,
@@ -156,6 +196,10 @@ __all__ = [
     "SemanticDiff",
     "SemanticSearchResult",
     "MergeResolution",
+    # Deferred Formalization
+    "FormalizationType",
+    "FormalizedOutput",
+    "ProvenanceRecord",
     # Phase 2: Cryptographic Integrity
     "ChainedIntent",
     "MerkleChain",
@@ -251,5 +295,33 @@ __all__ = [
     "KeyManagementError",
     "RevocationError",
     "ENCRYPTION_AVAILABLE",
+    # Phase 9: HITL Triggers
+    "TriggerType",
+    "TriggerResponse",
+    "SensitivityLevel",
+    "TriggerRequest",
+    "TriggerResult",
+    "TriggerDeniedError",
+    "TriggerTimeoutError",
+    "TriggerHandlerBase",
+    "ConsoleTriggerHandler",
+    "CallbackTriggerHandler",
+    "set_trigger_handler",
+    "get_trigger_handler",
+    "get_trigger_history",
+    "clear_trigger_history",
+    "require_human_approval",
+    "notify_human",
+    "requires_approval",
+    "requires_confirmation",
+    "requires_review",
+    "TriggerScope",
+    "sensitive_operation",
+    "CommonTriggers",
+    "database_write",
+    "email_send",
+    "external_api_call",
+    "file_operation",
+    "payment_processing",
     "__version__",
 ]
