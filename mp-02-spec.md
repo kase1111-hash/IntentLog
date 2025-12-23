@@ -3,7 +3,7 @@
 *NatLangChain Effort Verification Specification (Standalone)*
 
 **Status**: Draft (Normative)
-**Last Updated**: December 2025
+**Last Updated**: December 23, 2025
 
 ---
 
@@ -266,13 +266,15 @@ Features required for basic IntentLog functionality.
 |---------|--------|-------------|--------|
 | Persistent storage | INTEGRATION.md | Save/load intent logs to `.intentlog/` directory | **Implemented** |
 | Prose commits with hashes | README.md | Timestamped commits with SHA-256 hashes | **Implemented** |
-| Merkle tree integrity | README.md | Hash-chain for tamper-evident history | Partial (hashes per intent, no chain yet) |
+| Merkle tree integrity | README.md | Hash-chain for tamper-evident history | **Partial** (per-intent hashes, no chain linking) |
 | Intent branching | README.md | Create experimental branches for alternatives | **Implemented** |
 | Merge via explanation | README.md | Resolve conflicts with narrative commits | **Implemented** |
-| Precedent trails | README.md | Reference chains between commits (case law) | Partial (parent_id supported) |
+| Precedent trails | README.md | Reference chains between commits (case law) | **Implemented** (parent_id supported) |
 | File attachment | README.md | `--attach` to link code/files to commits | **Implemented** |
+| Cryptographic signatures | Prior-Art.md | Ed25519/GPG signatures for intents | **Not Implemented** |
+| Key management | Plan 2 | Generate, export, manage signing keys | **Not Implemented** |
 
-### Category B: LLM-Powered Features (Priority: High, Target: Q1 2026)
+### Category B: LLM-Powered Features (Priority: High)
 
 Features requiring LLM integration.
 
@@ -280,10 +282,11 @@ Features requiring LLM integration.
 |---------|--------|-------------|--------|
 | Semantic diffs | README.md | LLM-generated human-readable change summaries | **Implemented** |
 | Semantic search | README.md | Query reasoning with natural language | **Implemented** |
-| Deferred formalization | README.md | LLM derives code/rules from prose on demand | Planned |
-| Automated classification | INTEGRATION.md | LLM-based intent classification | Partial (keyword-based) |
+| Deferred formalization | README.md | LLM derives code/rules from prose on demand | **Not Implemented** |
+| Automated classification | INTEGRATION.md | LLM-based intent classification | **Partial** (keyword-based only) |
 | Conflict resolution via LLM | INTEGRATION.md | LLM-assisted merge reasoning | **Implemented** |
 | Pluggable LLM backends | README.md | Support OpenAI, Anthropic, local models | **Implemented** |
+| Embedding caching | Plan 3 | Persistent cache for embeddings | **Implemented** |
 
 ### Category C: MP-02 Protocol Components (Priority: Medium)
 
@@ -298,7 +301,7 @@ Components defined in MP-02 specification sections 4-12.
 | Ledger anchoring | Section 9 | Append-only, time-ordered log | **Implemented** |
 | Third-party verification | Section 10 | Recompute hashes, verify inclusion | **Implemented** |
 | Failure mode recording | Section 11 | Track gaps, conflicts, manipulation | **Implemented** |
-| Privacy controls | Section 12 | Encryption, access control, revocation | Partial (encryption planned) |
+| Privacy controls | Section 12 | Encryption, access control, revocation | **Not Implemented** (planned) |
 
 ### Category D: Advanced Use Cases (Priority: Medium)
 
@@ -306,15 +309,16 @@ Features from Advanced-Use-Cases.md for production deployments.
 
 | Feature | Description | Status |
 |---------|-------------|--------|
-| `@intent_logger` decorator | Automatic nested intent tracing for functions | Planned |
+| `@intent_logger` decorator | Automatic nested intent tracing for functions | **Not Implemented** |
+| Context management | Thread-local/async storage for current intent | **Not Implemented** |
 | Eval set generation | Export intents as ground truth for evaluation | **Implemented** |
 | Latency tracking | Timestamp start/end for bottleneck discovery | **Implemented** |
-| Human-in-the-loop triggers | Show intent before sensitive operations | Planned |
+| Human-in-the-loop triggers | Show intent before sensitive operations | **Not Implemented** |
 | Fine-tuning data pipeline | Filter logs for model training data | **Implemented** |
-| `session_id` context | Trace user journeys across sessions | Planned |
-| Conditional logging levels | Granular vs high-level by environment | Planned |
+| `session_id` context | Trace user journeys across sessions | **Not Implemented** |
+| Conditional logging levels | Granular vs high-level by environment | **Not Implemented** |
 
-### Category E: Doctrine of Intent Metrics (Priority: Future)
+### Category E: Doctrine of Intent Metrics (Priority: Complete)
 
 Metrics from Doctrine-of-intent.md for provenance verification.
 
@@ -323,6 +327,8 @@ Metrics from Doctrine-of-intent.md for provenance verification.
 | Intent Density (Di) scoring | Measure resolution and continuity of records | **Implemented** |
 | Intent Sufficiency Test | Validate continuity, directionality, resolution, anchoring, attribution | **Implemented** |
 | Information Density metrics | Measure auditability and fraud resistance | **Implemented** |
+| Auditability scoring | Score audit trail quality | **Implemented** |
+| Fraud resistance rating | Rate resistance to tampering | **Implemented** |
 
 ### Category F: Infrastructure & Integrations (Priority: Future)
 
@@ -330,12 +336,51 @@ Long-term infrastructure improvements from INTEGRATION.md.
 
 | Feature | Description | Status |
 |---------|-------------|--------|
-| Decentralized storage | Optional distributed storage backends | Future |
-| Hardware (TPM) binding | Bind critical intents to hardware security | Future |
-| Multi-language support | Beyond Python (JS, Go, Rust) | Future |
-| IDE plugins | Inline intent logging in VSCode, JetBrains | Future |
-| Git deep integration | Bidirectional sync with git history | Future |
-| External anchoring | Bitcoin/Ethereum timestamping | Future |
+| Decentralized storage | Optional distributed storage backends | **Not Implemented** |
+| Hardware (TPM) binding | Bind critical intents to hardware security | **Not Implemented** |
+| Multi-language support | Beyond Python (JS, Go, Rust) | **Not Implemented** |
+| IDE plugins | Inline intent logging in VSCode, JetBrains | **Not Implemented** |
+| Git deep integration | Bidirectional sync with git history | **Partial** (--attach flag, manual workflow) |
+| External anchoring | Bitcoin/Ethereum timestamping (OpenTimestamps) | **Not Implemented** |
+| Memory Vault integration | Secure classified storage for high-value intents | **Implemented** |
+| CI/CD integration | GitHub Actions workflow for intent auditing | **Implemented** |
+
+---
+
+## Unimplemented Features Summary
+
+The following features are documented but not yet implemented:
+
+### High Priority (Core Functionality Gaps)
+
+| Feature | Source | Files Needed | Description |
+|---------|--------|--------------|-------------|
+| Merkle tree chain | README.md | `merkle.py` | Link intent hashes to form tamper-evident chain |
+| Cryptographic signatures | Prior-Art.md | `crypto.py` | Ed25519/GPG signing of intents |
+| Key management | Plan 2 | `crypto.py` | CLI commands: `ilog keys generate/export` |
+| Privacy controls | MP-02 §12 | `privacy.py` | Encryption, access control, revocation |
+| Deferred formalization | README.md | `semantic.py` | LLM derives code/rules from prose |
+
+### Medium Priority (Advanced Features)
+
+| Feature | Source | Files Needed | Description |
+|---------|--------|--------------|-------------|
+| `@intent_logger` decorator | Advanced-Use-Cases.md | `decorator.py` | Automatic nested intent tracing |
+| Context management | Advanced-Use-Cases.md | `context.py` | Thread-local/async intent context |
+| HITL triggers | Advanced-Use-Cases.md | `triggers.py` | Show intent before sensitive ops |
+| `session_id` context | Advanced-Use-Cases.md | `context.py` | Cross-session journey tracing |
+| Conditional logging levels | Advanced-Use-Cases.md | `decorator.py` | Environment-based granularity |
+| LLM-based classification | INTEGRATION.md | `integrations/` | Replace keyword-based classification |
+
+### Future/Infrastructure
+
+| Feature | Source | Description |
+|---------|--------|-------------|
+| External anchoring | INTEGRATION.md | Bitcoin/Ethereum timestamping |
+| Hardware (TPM) binding | INTEGRATION.md | Hardware security for critical intents |
+| Multi-language support | INTEGRATION.md | JavaScript, Go, Rust implementations |
+| IDE plugins | INTEGRATION.md | VSCode, JetBrains integration |
+| Decentralized storage | INTEGRATION.md | Distributed storage backends |
 
 ---
 
@@ -718,13 +763,15 @@ Implement Intent Sufficiency Test per Doctrine-of-intent.md.
 
 ## Implementation Priority Summary
 
-| Phase | Plans | Target | Description | Status |
-|-------|-------|--------|-------------|--------|
-| 1 | 1, 2 | Immediate | Core functionality: persistence, CLI, crypto | **Complete** |
-| 2 | 3, 6 | Q1 2026 | LLM integration, decorator | **Complete** |
-| 3 | 4, 5 | Q2 2026 | MP-02 protocol components | **Complete** |
-| 4 | 7, 8 | Q3 2026 | Analytics and metrics | **Complete** |
-| 5 | Category F | 2026+ | Infrastructure expansion | Future |
+| Phase | Plans | Description | Status | Notes |
+|-------|-------|-------------|--------|-------|
+| 1 | 1 | Core CLI, Storage, Branching | **Complete** | All CLI commands working |
+| 2 | 2 (partial) | Cryptographic Integrity | **Partial** | Per-intent hashes only, no chain or signatures |
+| 3 | 3 | LLM Integration | **Complete** | OpenAI, Anthropic, Ollama providers |
+| 4 | 4, 5 | MP-02 Protocol | **Complete** | Observer, Validator, Receipts, Ledger |
+| 5 | 6 | Decorator & Context | **Not Started** | `@intent_logger` not implemented |
+| 6 | 7, 8 | Analytics & Metrics | **Complete** | Export, Analytics, Sufficiency Test |
+| 7 | Category F | Infrastructure Expansion | **Future** | External anchoring, TPM, multi-lang |
 
 ---
 
@@ -774,14 +821,33 @@ This section provides a consolidated reference to all project documentation and 
 
 ## Verification Notes
 
-### Verified Implementation Status (December 2025)
+### Verified Implementation Status (December 23, 2025)
 
 **Phase 1 Complete** - Core CLI and storage implemented.
-**Phase 2 Complete** - LLM integration with semantic features.
-**Phase 3 Complete** - MP-02 Protocol components implemented.
-**Phase 4 Complete** - Analytics and metrics implemented.
+**Phase 2 Partial** - Per-intent hashes implemented; Merkle chain and signatures NOT implemented.
+**Phase 3 Complete** - LLM integration with semantic features.
+**Phase 4 Complete** - MP-02 Protocol components implemented.
+**Phase 5 Not Started** - `@intent_logger` decorator NOT implemented.
+**Phase 6 Complete** - Analytics and metrics implemented.
 
 **Total: 203 tests passing**
+
+### Outstanding Unimplemented Features
+
+The following features are documented across project documentation but have no implementation:
+
+1. **Merkle tree hash chain** - Individual hashes exist, but no chain linking (`prev_hash`)
+2. **Cryptographic signatures** - No Ed25519/GPG signing capability
+3. **Key management** - No `ilog keys` commands
+4. **`@intent_logger` decorator** - Mentioned in Advanced-Use-Cases.md, not implemented
+5. **Context management** - No thread-local or async context for intents
+6. **Privacy controls** - No encryption, access control, or revocation
+7. **Deferred formalization** - LLM-derived code from prose not implemented
+8. **HITL triggers** - No human-in-the-loop integration
+9. **session_id context** - Cross-session tracking not implemented
+10. **Conditional logging levels** - No environment-based granularity
+11. **LLM-based classification** - Only keyword-based classification exists
+12. **External anchoring** - No Bitcoin/Ethereum timestamping
 
 ---
 
