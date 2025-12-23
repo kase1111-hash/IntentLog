@@ -243,9 +243,11 @@ This section tracks the implementation status of all features documented across 
 | `ilog search <query>` | **Implemented** | `cli.py:186` | Case-insensitive search in name/reasoning |
 | `ilog audit <file>` | **Implemented** | `cli.py:235` | Full functionality with `audit.py` |
 | `ilog status` | **Implemented** | `cli.py:248` | Shows project info, branch, intent count |
-| `ilog diff` | Planned | README.md | Semantic diff (Phase 2: LLM integration) |
-| `ilog merge` | Planned | README.md | Merge with explanation (Phase 2) |
+| `ilog diff` | **Implemented** | `cli.py:316` | Semantic diff between branches (with LLM) |
+| `ilog merge` | **Implemented** | `cli.py:392` | Merge branches with optional message |
+| `ilog config` | **Implemented** | `cli.py:441` | Configure LLM provider and settings |
 | `--attach` flag | **Implemented** | `cli.py:59` | Attaches git files with hashes to metadata |
+| `--semantic` flag | **Implemented** | `cli.py:202` | Semantic search using embeddings |
 
 ---
 
@@ -261,7 +263,7 @@ Features required for basic IntentLog functionality.
 | Prose commits with hashes | README.md | Timestamped commits with SHA-256 hashes | **Implemented** |
 | Merkle tree integrity | README.md | Hash-chain for tamper-evident history | Partial (hashes per intent, no chain yet) |
 | Intent branching | README.md | Create experimental branches for alternatives | **Implemented** |
-| Merge via explanation | README.md | Resolve conflicts with narrative commits | Planned (Phase 2) |
+| Merge via explanation | README.md | Resolve conflicts with narrative commits | **Implemented** |
 | Precedent trails | README.md | Reference chains between commits (case law) | Partial (parent_id supported) |
 | File attachment | README.md | `--attach` to link code/files to commits | **Implemented** |
 
@@ -271,12 +273,12 @@ Features requiring LLM integration.
 
 | Feature | Source | Description | Status |
 |---------|--------|-------------|--------|
-| Semantic diffs | README.md | LLM-generated human-readable change summaries | Planned |
-| Semantic search | README.md | Query reasoning with natural language | Planned |
+| Semantic diffs | README.md | LLM-generated human-readable change summaries | **Implemented** |
+| Semantic search | README.md | Query reasoning with natural language | **Implemented** |
 | Deferred formalization | README.md | LLM derives code/rules from prose on demand | Planned |
-| Automated classification | INTEGRATION.md | LLM-based intent classification | Planned |
-| Conflict resolution via LLM | INTEGRATION.md | LLM-assisted merge reasoning | Planned |
-| Pluggable LLM backends | README.md | Support OpenAI, Anthropic, local models | Planned |
+| Automated classification | INTEGRATION.md | LLM-based intent classification | Partial (keyword-based) |
+| Conflict resolution via LLM | INTEGRATION.md | LLM-assisted merge reasoning | **Implemented** |
+| Pluggable LLM backends | README.md | Support OpenAI, Anthropic, local models | **Implemented** |
 
 ### Category C: MP-02 Protocol Components (Priority: Medium)
 
@@ -769,28 +771,43 @@ This section provides a consolidated reference to all project documentation and 
 
 ### Verified Implementation Status (December 2025)
 
-**Phase 1 Complete** - Core CLI and storage implemented with 76 passing tests.
+**Phase 1 Complete** - Core CLI and storage implemented.
+**Phase 2 Complete** - LLM integration with semantic features.
 
-**Fully Implemented (Phase 1):**
+**Total: 105 tests passing**
+
+---
+
+**Phase 1 - Core CLI & Storage:**
 - `Intent` dataclass with UUID, timestamp, parent linking (`core.py:14-43`)
 - `IntentLog` manager with add, get, search, export, chain (`core.py:45-109`)
 - Audit engine: empty reasoning + loop detection (`audit.py:23-56`)
 - Memory Vault integration: classification, store, recall (`integrations/memory_vault.py`)
 - **Storage module** with persistent `.intentlog/` directory (`storage.py`)
-- **Project configuration** with branch tracking (`storage.py:25`)
+- **Project configuration** with branch tracking and LLM settings (`storage.py`)
 - **Intent hash computation** using SHA-256 (`storage.py:74`)
 - **Branch management** - create, switch, list (`storage.py:285`)
-- Entry points: Both `intentlog` and `ilog` aliases available (`setup.py:39-44`)
+
+**Phase 2 - LLM Integration:**
+- **LLM Provider Interface** - Abstract base class with MockProvider (`llm/provider.py`)
+- **OpenAI Provider** - GPT-4, GPT-3.5, embeddings (`llm/openai.py`)
+- **Anthropic Provider** - Claude 3.5, Claude 3 (`llm/anthropic.py`)
+- **Ollama Provider** - Local models, embeddings (`llm/ollama.py`)
+- **Provider Registry** - Dynamic provider registration and lookup (`llm/registry.py`)
+- **Semantic Engine** - Diff, search, merge resolution (`semantic.py`)
+- **Embedding Caching** - Persistent cache for embeddings
 
 **CLI Commands (All Implemented):**
-- `ilog init <project>` - Creates `.intentlog/` with config.json, intents.json, branches/
-- `ilog commit <message>` - Adds intent with hash to current branch
+- `ilog init <project>` - Creates `.intentlog/` with config
+- `ilog commit <message>` - Adds intent with hash
 - `ilog branch [name]` - Lists, creates, or switches branches
-- `ilog log` - Shows intent history with `--limit` and `--branch` options
-- `ilog search <query>` - Case-insensitive search in name/reasoning
-- `ilog audit <file>` - Full audit functionality
-- `ilog status` - Shows project info
-- `--attach` flag - Attaches git-tracked files with hashes
+- `ilog log` - Shows intent history
+- `ilog search <query>` - Text or semantic search (`--semantic`)
+- `ilog diff branch1..branch2` - Semantic diff between branches
+- `ilog merge <branch>` - Merge with optional message
+- `ilog config llm` - Configure LLM provider
+- `ilog status` - Shows project info with LLM status
+- `ilog audit <file>` - Audit intent logs
 
 **Test Coverage:**
 - `test_storage.py`: 27 tests for storage module
@@ -798,14 +815,15 @@ This section provides a consolidated reference to all project documentation and 
 - `test_core.py`: 11 tests for core classes
 - `test_audit.py`: 4 tests for audit functionality
 - `test_integrations.py`: 9 tests for Memory Vault
-- **Total: 76 tests passing**
+- `test_llm.py`: 29 tests for LLM module
+- **Total: 105 tests passing**
 
 ### Known Issues
 
 | Issue | Location | Severity | Status |
 |-------|----------|----------|--------|
-| ~~License mismatch~~ | `setup.py` | ~~Medium~~ | **Fixed** - License now correctly set to CC-BY-SA-4.0 |
-| ~~pytest in install_requires~~ | `setup.py` | ~~Low~~ | **Fixed** - Moved to dev dependencies |
+| ~~License mismatch~~ | `setup.py` | ~~Medium~~ | **Fixed** |
+| ~~pytest in install_requires~~ | `setup.py` | ~~Low~~ | **Fixed** |
 
 *No outstanding issues as of December 2025 verification.*
 

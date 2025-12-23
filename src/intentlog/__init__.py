@@ -14,6 +14,7 @@ from .audit import audit_logs
 from .storage import (
     IntentLogStorage,
     ProjectConfig,
+    LLMSettings,
     compute_intent_hash,
     find_project_root,
     StorageError,
@@ -22,6 +23,7 @@ from .storage import (
     BranchNotFoundError,
     BranchExistsError,
 )
+from .semantic import SemanticEngine, SemanticDiff, SemanticSearchResult, MergeResolution
 
 __all__ = [
     "IntentLog",
@@ -29,6 +31,7 @@ __all__ = [
     "audit_logs",
     "IntentLogStorage",
     "ProjectConfig",
+    "LLMSettings",
     "compute_intent_hash",
     "find_project_root",
     "StorageError",
@@ -36,5 +39,9 @@ __all__ = [
     "ProjectExistsError",
     "BranchNotFoundError",
     "BranchExistsError",
+    "SemanticEngine",
+    "SemanticDiff",
+    "SemanticSearchResult",
+    "MergeResolution",
     "__version__",
 ]

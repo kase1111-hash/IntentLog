@@ -25,12 +25,49 @@ BRANCHES_DIR = "branches"
 
 
 @dataclass
+class LLMSettings:
+    """LLM configuration for semantic features"""
+    provider: str = ""  # "openai", "anthropic", "ollama"
+    model: str = ""  # Model name
+    api_key_env: str = ""  # Environment variable for API key
+    embedding_provider: str = ""  # Provider for embeddings (if different)
+    embedding_model: str = ""  # Embedding model name
+    base_url: str = ""  # Custom API endpoint
+
+    def to_dict(self) -> Dict[str, Any]:
+        return {
+            "provider": self.provider,
+            "model": self.model,
+            "api_key_env": self.api_key_env,
+            "embedding_provider": self.embedding_provider,
+            "embedding_model": self.embedding_model,
+            "base_url": self.base_url,
+        }
+
+    @classmethod
+    def from_dict(cls, data: Dict[str, Any]) -> "LLMSettings":
+        return cls(
+            provider=data.get("provider", ""),
+            model=data.get("model", ""),
+            api_key_env=data.get("api_key_env", ""),
+            embedding_provider=data.get("embedding_provider", ""),
+            embedding_model=data.get("embedding_model", ""),
+            base_url=data.get("base_url", ""),
+        )
+
+    def is_configured(self) -> bool:
+        """Check if LLM is configured"""
+        return bool(self.provider)
+
+
+@dataclass
 class ProjectConfig:
     """Configuration for an IntentLog project"""
     project_name: str
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     current_branch: str = "main"
     version: str = "0.1.0"
+    llm: LLMSettings = field(default_factory=LLMSettings)
 
     def to_dict(self) -> Dict[str, Any]:
         return {
@@ -38,15 +75,18 @@ class ProjectConfig:
             "created_at": self.created_at,
             "current_branch": self.current_branch,
             "version": self.version,
+            "llm": self.llm.to_dict(),
         }
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ProjectConfig":
+        llm_data = data.get("llm", {})
         return cls(
             project_name=data["project_name"],
             created_at=data.get("created_at", datetime.now().isoformat()),
             current_branch=data.get("current_branch", "main"),
             version=data.get("version", "0.1.0"),
+            llm=LLMSettings.from_dict(llm_data) if llm_data else LLMSettings(),
         )
 
 
