@@ -307,10 +307,10 @@ Features from Advanced-Use-Cases.md for production deployments.
 | Feature | Description | Status |
 |---------|-------------|--------|
 | `@intent_logger` decorator | Automatic nested intent tracing for functions | Planned |
-| Eval set generation | Export intents as ground truth for evaluation | Planned |
-| Latency tracking | Timestamp start/end for bottleneck discovery | Planned |
+| Eval set generation | Export intents as ground truth for evaluation | **Implemented** |
+| Latency tracking | Timestamp start/end for bottleneck discovery | **Implemented** |
 | Human-in-the-loop triggers | Show intent before sensitive operations | Planned |
-| Fine-tuning data pipeline | Filter logs for model training data | Planned |
+| Fine-tuning data pipeline | Filter logs for model training data | **Implemented** |
 | `session_id` context | Trace user journeys across sessions | Planned |
 | Conditional logging levels | Granular vs high-level by environment | Planned |
 
@@ -320,9 +320,9 @@ Metrics from Doctrine-of-intent.md for provenance verification.
 
 | Feature | Description | Status |
 |---------|-------------|--------|
-| Intent Density (Di) scoring | Measure resolution and continuity of records | Future |
-| Intent Sufficiency Test | Validate continuity, directionality, resolution, anchoring, attribution | Future |
-| Information Density metrics | Measure auditability and fraud resistance | Future |
+| Intent Density (Di) scoring | Measure resolution and continuity of records | **Implemented** |
+| Intent Sufficiency Test | Validate continuity, directionality, resolution, anchoring, attribution | **Implemented** |
+| Information Density metrics | Measure auditability and fraud resistance | **Implemented** |
 
 ### Category F: Infrastructure & Integrations (Priority: Future)
 
@@ -723,7 +723,7 @@ Implement Intent Sufficiency Test per Doctrine-of-intent.md.
 | 1 | 1, 2 | Immediate | Core functionality: persistence, CLI, crypto | **Complete** |
 | 2 | 3, 6 | Q1 2026 | LLM integration, decorator | **Complete** |
 | 3 | 4, 5 | Q2 2026 | MP-02 protocol components | **Complete** |
-| 4 | 7, 8 | Q3 2026 | Analytics and metrics | Planned |
+| 4 | 7, 8 | Q3 2026 | Analytics and metrics | **Complete** |
 | 5 | Category F | 2026+ | Infrastructure expansion | Future |
 
 ---
@@ -779,8 +779,9 @@ This section provides a consolidated reference to all project documentation and 
 **Phase 1 Complete** - Core CLI and storage implemented.
 **Phase 2 Complete** - LLM integration with semantic features.
 **Phase 3 Complete** - MP-02 Protocol components implemented.
+**Phase 4 Complete** - Analytics and metrics implemented.
 
-**Total: 158 tests passing**
+**Total: 203 tests passing**
 
 ---
 
@@ -829,6 +830,21 @@ This section provides a consolidated reference to all project documentation and 
 - `ilog receipt <create|list|show|verify>` - Effort receipts (MP-02)
 - `ilog ledger <show|verify|export|stats|checkpoint>` - Ledger management (MP-02)
 - `ilog verify <all|ledger|receipts|receipt_id>` - Integrity verification (MP-02)
+- `ilog export` - Export intents to JSON/JSONL/CSV/HuggingFace/OpenAI formats
+- `ilog analytics` - Generate analytics reports (summary, latency, frequency, etc.)
+- `ilog metrics` - Compute doctrine metrics (density, auditability, fraud resistance)
+- `ilog sufficiency` - Run Intent Sufficiency Test
+
+**Phase 4 - Analytics & Metrics:**
+- **Export Module** - IntentExporter, ExportFilter, ExportFormat, AnonymizationConfig (`export.py`)
+- **Export Formats** - JSON, JSONL, CSV, HuggingFace, OpenAI fine-tuning
+- **Anonymization** - ID hashing, name anonymization, timestamp rounding, metadata filtering
+- **Analytics Module** - IntentAnalytics, LatencyStats, FrequencyStats, ErrorStats, ActivityPattern (`analytics.py`)
+- **Analytics Reports** - Full reports with latency, frequency, errors, activity patterns
+- **Trending & Bottlenecks** - Identify trending intents and high-latency bottlenecks
+- **Intent Metrics** - IntentDensity (Di), InformationDensity, AuditabilityScore, FraudResistance (`metrics.py`)
+- **Sufficiency Test** - 5-criteria test per Doctrine-of-intent.md (`sufficiency.py`)
+- **CLI Commands** - `ilog export`, `ilog analytics`, `ilog metrics`, `ilog sufficiency`
 
 **Test Coverage:**
 - `test_storage.py`: 27 tests for storage module
@@ -838,7 +854,8 @@ This section provides a consolidated reference to all project documentation and 
 - `test_integrations.py`: 9 tests for Memory Vault
 - `test_llm.py`: 29 tests for LLM module
 - `test_mp02.py`: 53 tests for MP-02 protocol components
-- **Total: 158 tests passing**
+- `test_phase4.py`: 45 tests for analytics and metrics
+- **Total: 203 tests passing**
 
 ### Known Issues
 
