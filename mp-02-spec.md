@@ -309,14 +309,14 @@ Features from Advanced-Use-Cases.md for production deployments.
 
 | Feature | Description | Status |
 |---------|-------------|--------|
-| `@intent_logger` decorator | Automatic nested intent tracing for functions | **Not Implemented** |
-| Context management | Thread-local/async storage for current intent | **Not Implemented** |
+| `@intent_logger` decorator | Automatic nested intent tracing for functions | **Implemented** |
+| Context management | Thread-local/async storage for current intent | **Implemented** |
 | Eval set generation | Export intents as ground truth for evaluation | **Implemented** |
 | Latency tracking | Timestamp start/end for bottleneck discovery | **Implemented** |
 | Human-in-the-loop triggers | Show intent before sensitive operations | **Not Implemented** |
 | Fine-tuning data pipeline | Filter logs for model training data | **Implemented** |
-| `session_id` context | Trace user journeys across sessions | **Not Implemented** |
-| Conditional logging levels | Granular vs high-level by environment | **Not Implemented** |
+| `session_id` context | Trace user journeys across sessions | **Implemented** |
+| Conditional logging levels | Granular vs high-level by environment | **Implemented** |
 
 ### Category E: Doctrine of Intent Metrics (Priority: Complete)
 
@@ -362,11 +362,7 @@ The following features are documented but not yet implemented:
 
 | Feature | Source | Files Needed | Description |
 |---------|--------|--------------|-------------|
-| `@intent_logger` decorator | Advanced-Use-Cases.md | `decorator.py` | Automatic nested intent tracing |
-| Context management | Advanced-Use-Cases.md | `context.py` | Thread-local/async intent context |
 | HITL triggers | Advanced-Use-Cases.md | `triggers.py` | Show intent before sensitive ops |
-| `session_id` context | Advanced-Use-Cases.md | `context.py` | Cross-session journey tracing |
-| Conditional logging levels | Advanced-Use-Cases.md | `decorator.py` | Environment-based granularity |
 | LLM-based classification | INTEGRATION.md | `integrations/` | Replace keyword-based classification |
 
 ### Future/Infrastructure
@@ -766,7 +762,7 @@ Implement Intent Sufficiency Test per Doctrine-of-intent.md.
 | 2 | 2 | Cryptographic Integrity | **Complete** | Merkle chain, Ed25519 signatures, key management |
 | 3 | 3 | LLM Integration | **Complete** | OpenAI, Anthropic, Ollama providers |
 | 4 | 4, 5 | MP-02 Protocol | **Complete** | Observer, Validator, Receipts, Ledger |
-| 5 | 6 | Decorator & Context | **Not Started** | `@intent_logger` not implemented |
+| 5 | 6 | Decorator & Context | **Complete** | `@intent_logger`, context management, session tracking |
 | 6 | 7, 8 | Analytics & Metrics | **Complete** | Export, Analytics, Sufficiency Test |
 | 7 | Category F | Infrastructure Expansion | **Future** | External anchoring, TPM, multi-lang |
 
@@ -824,10 +820,10 @@ This section provides a consolidated reference to all project documentation and 
 **Phase 2 Complete** - Merkle chain linking (`prev_hash`), Ed25519 signatures, key management.
 **Phase 3 Complete** - LLM integration with semantic features.
 **Phase 4 Complete** - MP-02 Protocol components implemented.
-**Phase 5 Not Started** - `@intent_logger` decorator NOT implemented.
+**Phase 5 Complete** - `@intent_logger` decorator, context management, session tracking.
 **Phase 6 Complete** - Analytics and metrics implemented.
 
-**Total: 256 tests passing** (203 original + 53 Phase 2)
+**Total: 300 tests passing** (256 previous + 44 Phase 5)
 
 ### New CLI Commands (Phase 2)
 
@@ -845,15 +841,11 @@ This section provides a consolidated reference to all project documentation and 
 
 The following features are documented across project documentation but have no implementation:
 
-1. **`@intent_logger` decorator** - Mentioned in Advanced-Use-Cases.md, not implemented
-2. **Context management** - No thread-local or async context for intents
-3. **Privacy controls** - No encryption, access control, or revocation
-4. **Deferred formalization** - LLM-derived code from prose not implemented
-5. **HITL triggers** - No human-in-the-loop integration
-6. **session_id context** - Cross-session tracking not implemented
-7. **Conditional logging levels** - No environment-based granularity
-8. **LLM-based classification** - Only keyword-based classification exists
-9. **External anchoring** - No Bitcoin/Ethereum timestamping
+1. **Privacy controls** - No encryption, access control, or revocation
+2. **Deferred formalization** - LLM-derived code from prose not implemented
+3. **HITL triggers** - No human-in-the-loop integration
+4. **LLM-based classification** - Only keyword-based classification exists
+5. **External anchoring** - No Bitcoin/Ethereum timestamping
 
 ---
 
@@ -918,6 +910,17 @@ The following features are documented across project documentation but have no i
 - **Sufficiency Test** - 5-criteria test per Doctrine-of-intent.md (`sufficiency.py`)
 - **CLI Commands** - `ilog export`, `ilog analytics`, `ilog metrics`, `ilog sufficiency`
 
+**Phase 5 - Decorator & Context:**
+- **Context Module** - IntentContext, SessionContext, contextvars-based tracking (`context.py`)
+- **Intent Context Manager** - Thread-local and async-safe context for intent tracking
+- **Session Context Manager** - Session-level context for user journey tracking
+- **@intent_logger Decorator** - Automatic function entry/exit logging (`decorator.py`)
+- **Class Decorator** - `@intent_logger_class` for all methods
+- **Log Levels** - DEBUG, INFO, IMPORTANT, CRITICAL, OFF
+- **Conditional Logging** - Environment-based granularity via log levels
+- **Persistence Option** - Persist decorated intents to storage
+- **Async Support** - Full async/await support for decorated functions
+
 **Test Coverage:**
 - `test_storage.py`: 27 tests for storage module
 - `test_cli_integration.py`: 21 tests for CLI end-to-end
@@ -926,8 +929,10 @@ The following features are documented across project documentation but have no i
 - `test_integrations.py`: 9 tests for Memory Vault
 - `test_llm.py`: 29 tests for LLM module
 - `test_mp02.py`: 53 tests for MP-02 protocol components
+- `test_phase2.py`: 53 tests for cryptographic integrity
 - `test_phase4.py`: 45 tests for analytics and metrics
-- **Total: 203 tests passing**
+- `test_phase5.py`: 44 tests for decorator and context
+- **Total: 300 tests passing**
 
 ### Known Issues
 

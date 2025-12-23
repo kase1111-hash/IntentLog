@@ -69,6 +69,36 @@ from .analytics import IntentAnalytics, AnalyticsReport, LatencyStats, Frequency
 from .metrics import IntentMetrics, IntentDensity, AuditabilityScore, FraudResistance
 from .sufficiency import SufficiencyTest, SufficiencyReport, run_sufficiency_test
 
+# Phase 5: Context and Decorator
+from .context import (
+    IntentContext,
+    IntentContextManager,
+    SessionContext,
+    SessionContextManager,
+    get_current_intent,
+    set_current_intent,
+    get_current_session,
+    set_current_session,
+    get_intent_chain,
+    get_current_depth,
+    get_session_id,
+    intent_scope,
+    session_scope,
+)
+from .decorator import (
+    intent_logger,
+    intent_logger_class,
+    IntentLoggerConfig,
+    LogLevel,
+    set_log_level,
+    get_log_level,
+    should_log,
+    get_intent_log,
+    clear_intent_log,
+    log_intent,
+    trace,
+)
+
 __all__ = [
     "IntentLog",
     "Intent",
@@ -121,5 +151,30 @@ __all__ = [
     "SufficiencyTest",
     "SufficiencyReport",
     "run_sufficiency_test",
+    # Phase 5: Context and Decorator
+    "IntentContext",
+    "IntentContextManager",
+    "SessionContext",
+    "SessionContextManager",
+    "get_current_intent",
+    "set_current_intent",
+    "get_current_session",
+    "set_current_session",
+    "get_intent_chain",
+    "get_current_depth",
+    "get_session_id",
+    "intent_scope",
+    "session_scope",
+    "intent_logger",
+    "intent_logger_class",
+    "IntentLoggerConfig",
+    "LogLevel",
+    "set_log_level",
+    "get_log_level",
+    "should_log",
+    "get_intent_log",
+    "clear_intent_log",
+    "log_intent",
+    "trace",
     "__version__",
 ]
