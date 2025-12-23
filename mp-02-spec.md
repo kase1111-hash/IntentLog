@@ -283,7 +283,7 @@ Features requiring LLM integration.
 | Semantic diffs | README.md | LLM-generated human-readable change summaries | **Implemented** |
 | Semantic search | README.md | Query reasoning with natural language | **Implemented** |
 | Deferred formalization | README.md | LLM derives code/rules from prose on demand | **Implemented** |
-| Automated classification | INTEGRATION.md | LLM-based intent classification | **Partial** (keyword-based only) |
+| Automated classification | INTEGRATION.md | LLM-based intent classification | **Implemented** |
 | Conflict resolution via LLM | INTEGRATION.md | LLM-assisted merge reasoning | **Implemented** |
 | Pluggable LLM backends | README.md | Support OpenAI, Anthropic, local models | **Implemented** |
 | Embedding caching | Plan 3 | Persistent cache for embeddings | **Implemented** |
@@ -350,12 +350,6 @@ Long-term infrastructure improvements from INTEGRATION.md.
 ## Unimplemented Features Summary
 
 The following features are documented but not yet implemented:
-
-### Medium Priority (Advanced Features)
-
-| Feature | Source | Files Needed | Description |
-|---------|--------|--------------|-------------|
-| LLM-based classification | INTEGRATION.md | `integrations/` | Replace keyword-based classification |
 
 ### Future/Infrastructure
 
@@ -817,8 +811,9 @@ This section provides a consolidated reference to all project documentation and 
 **Phase 7 Complete** - Privacy controls: encryption, access control, revocation (MP-02 §12).
 **Phase 8 Complete** - Deferred formalization: prose to code/rules/heuristics.
 **Phase 9 Complete** - Human-in-the-loop triggers for sensitive operations.
+**Phase 10 Complete** - LLM-based semantic classification for intents.
 
-**Total: 466 tests passing** (412 previous + 54 HITL triggers)
+**Total: 501 tests passing** (466 previous + 35 LLM classifier)
 
 ### New CLI Commands (Phase 2)
 
@@ -836,8 +831,7 @@ This section provides a consolidated reference to all project documentation and 
 
 The following features are documented across project documentation but have no implementation:
 
-1. **LLM-based classification** - Only keyword-based classification exists
-2. **External anchoring** - No Bitcoin/Ethereum timestamping
+1. **External anchoring** - No Bitcoin/Ethereum timestamping (future infrastructure)
 
 ---
 
@@ -964,6 +958,18 @@ The following features are documented across project documentation but have no i
 - **Trigger History** - Full audit trail of all HITL interactions
 - **Intent Integration** - Triggers capture current intent context
 
+**Phase 10 - LLM-Based Classification:**
+- **IntentCategory Enum** - transient, learned, failure, strategic, critical, architecture, security, compliance, performance, ux
+- **ClassificationResult** - Full result with category, confidence, level, reasoning, sensitivity, retention priority
+- **LLMIntentClassifier** - Semantic classification engine using LLM understanding
+- **classify()** - Classify intent by name and reasoning
+- **classify_intent()** - Classify Intent object directly
+- **batch_classify()** - Classify multiple intents
+- **Keyword Fallback** - Falls back to keyword matching if LLM fails
+- **Memory Vault Integration** - get_memory_vault_level(), should_persist(), should_use_vault()
+- **Classification Caching** - Optional caching of classification results
+- **classify_intent_with_llm()** - Convenience function for one-off classification
+
 **Test Coverage:**
 - `test_storage.py`: 27 tests for storage module
 - `test_cli_integration.py`: 21 tests for CLI end-to-end
@@ -978,7 +984,8 @@ The following features are documented across project documentation but have no i
 - `test_privacy.py`: 47 tests for privacy controls
 - `test_formalization.py`: 29 tests for deferred formalization
 - `test_triggers.py`: 54 tests for HITL triggers
-- **Total: 466 tests passing**
+- `test_llm_classifier.py`: 35 tests for LLM classification
+- **Total: 501 tests passing**
 
 ### Known Issues
 
