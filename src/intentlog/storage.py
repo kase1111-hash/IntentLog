@@ -4,6 +4,11 @@ IntentLog Storage Module
 This module provides persistent storage for IntentLog projects.
 Manages the .intentlog/ directory structure, JSON serialization,
 and file locking for concurrent access.
+
+Supports:
+- Merkle tree hash chains for tamper-evident history
+- Ed25519 cryptographic signatures
+- Branch management with chain verification
 """
 
 import json
@@ -12,10 +17,15 @@ import hashlib
 import fcntl
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, Dict, Any, List
+from typing import Optional, Dict, Any, List, Tuple, TYPE_CHECKING
 from dataclasses import dataclass, field
 
 from .core import Intent, IntentLog
+
+# Lazy imports to avoid circular dependencies
+if TYPE_CHECKING:
+    from .merkle import ChainedIntent, ChainVerificationResult
+    from .crypto import KeyManager, Signature
 
 
 INTENTLOG_DIR = ".intentlog"
@@ -548,3 +558,299 @@ class IntentLogStorage:
                     content = f.read()
                 hashes[file_path] = hashlib.sha256(content).hexdigest()[:12]
         return hashes
+
+    # =========================================================================
+    # Merkle Chain Methods
+    # =========================================================================
+
+    def load_chained_intents(
+        self,
+        branch: Optional[str] = None,
+    ) -> List["ChainedIntent"]:
+        """
+        Load intents with full chain data.
+
+        Args:
+            branch: Branch name. If None, uses current branch.
+
+        Returns:
+            List of ChainedIntent objects with chain linking
+        """
+        from .merkle import ChainedIntent, chain_intents
+
+        config = self.load_config()
+        branch = branch or config.current_branch
+
+        branch_file = self._get_branch_file(branch)
+        if not branch_file.is_file():
+            if branch == "main":
+                return []
+            raise BranchNotFoundError(f"Branch '{branch}' not found")
+
+        with self._lock_file(branch_file, exclusive=False):
+            with open(branch_file, 'r') as f:
+                data = json.load(f)
+
+        chained = []
+        for intent_data in data.get("intents", []):
+            # Check if chain data exists
+            if "chain_hash" in intent_data:
+                # Load with existing chain data
+                chained.append(ChainedIntent.from_dict(intent_data))
+            else:
+                # Legacy data without chain - need to rebuild
+                intent = Intent(
+                    intent_id=intent_data["intent_id"],
+                    intent_name=intent_data["intent_name"],
+                    intent_reasoning=intent_data["intent_reasoning"],
+                    timestamp=datetime.fromisoformat(intent_data["timestamp"]),
+                    metadata=intent_data.get("metadata", {}),
+                    parent_intent_id=intent_data.get("parent_intent_id"),
+                )
+                chained.append(intent)
+
+        # If any items are plain Intent, rebuild the chain
+        if chained and isinstance(chained[0], Intent):
+            plain_intents = [c if isinstance(c, Intent) else c.intent for c in chained]
+            chained = chain_intents(plain_intents)
+
+        return chained
+
+    def save_chained_intents(
+        self,
+        chained_intents: List["ChainedIntent"],
+        branch: Optional[str] = None,
+    ) -> None:
+        """
+        Save chained intents with full chain data.
+
+        Args:
+            chained_intents: List of ChainedIntent objects
+            branch: Branch name. If None, uses current branch.
+        """
+        from .merkle import compute_root_hash
+
+        config = self.load_config()
+        branch = branch or config.current_branch
+
+        branch_file = self._get_branch_file(branch)
+
+        data = {
+            "branch": branch,
+            "chain_version": "1.0",
+            "root_hash": compute_root_hash(chained_intents),
+            "intents": [c.to_dict() for c in chained_intents],
+        }
+
+        with self._lock_file(branch_file, exclusive=True):
+            with open(branch_file, 'w') as f:
+                json.dump(data, f, indent=2)
+
+    def add_chained_intent(
+        self,
+        name: str,
+        reasoning: str,
+        metadata: Optional[Dict[str, Any]] = None,
+        parent_id: Optional[str] = None,
+        branch: Optional[str] = None,
+        sign: bool = False,
+        key_password: Optional[str] = None,
+    ) -> "ChainedIntent":
+        """
+        Add a new intent with chain linking.
+
+        Args:
+            name: Intent name/title
+            reasoning: The reasoning/explanation
+            metadata: Optional metadata dict
+            parent_id: Optional parent intent ID
+            branch: Branch to add to. If None, uses current branch.
+            sign: If True, sign the intent with default key
+            key_password: Password for signing key if encrypted
+
+        Returns:
+            The created ChainedIntent with chain links
+        """
+        from .merkle import append_to_chain
+
+        intent = Intent(
+            intent_name=name,
+            intent_reasoning=reasoning,
+            metadata=metadata or {},
+            parent_intent_id=parent_id,
+        )
+
+        if not intent.validate():
+            raise ValueError("Intent must have name and non-empty reasoning")
+
+        # Load existing chain
+        chained_intents = self.load_chained_intents(branch)
+
+        # Append to chain
+        new_chained = append_to_chain(chained_intents, intent)
+
+        # Sign if requested
+        if sign:
+            signature = self._sign_chained_intent(new_chained, key_password)
+            new_chained.signature = signature
+
+        chained_intents.append(new_chained)
+        self.save_chained_intents(chained_intents, branch)
+
+        return new_chained
+
+    def _sign_chained_intent(
+        self,
+        chained: "ChainedIntent",
+        password: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """Sign a chained intent with the project's default key."""
+        from .crypto import KeyManager, sign_intent
+
+        key_manager = KeyManager(self.intentlog_dir)
+        if not key_manager.has_keys():
+            raise StorageError("No signing keys available. Run 'ilog keys generate' first.")
+
+        # Create signable data (content + chain links)
+        signable = {
+            "intent_id": chained.intent.intent_id,
+            "intent_hash": chained.intent_hash,
+            "prev_hash": chained.prev_hash,
+            "chain_hash": chained.chain_hash,
+            "sequence": chained.sequence,
+        }
+
+        signature = sign_intent(signable, key_manager, password=password)
+        return signature.to_dict()
+
+    def verify_chain(
+        self,
+        branch: Optional[str] = None,
+    ) -> "ChainVerificationResult":
+        """
+        Verify the integrity of a branch's intent chain.
+
+        Args:
+            branch: Branch to verify. If None, uses current branch.
+
+        Returns:
+            ChainVerificationResult with detailed status
+        """
+        from .merkle import verify_chain
+
+        chained = self.load_chained_intents(branch)
+        return verify_chain(chained)
+
+    def get_root_hash(self, branch: Optional[str] = None) -> str:
+        """
+        Get the root hash of a branch's chain.
+
+        Args:
+            branch: Branch name. If None, uses current branch.
+
+        Returns:
+            Root hash string
+        """
+        from .merkle import compute_root_hash, GENESIS_HASH
+
+        chained = self.load_chained_intents(branch)
+        if not chained:
+            return GENESIS_HASH
+        return compute_root_hash(chained)
+
+    def get_inclusion_proof(
+        self,
+        sequence: int,
+        branch: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Generate an inclusion proof for an intent.
+
+        Args:
+            sequence: Sequence number of intent
+            branch: Branch name. If None, uses current branch.
+
+        Returns:
+            Proof dictionary
+        """
+        from .merkle import generate_inclusion_proof
+
+        chained = self.load_chained_intents(branch)
+        return generate_inclusion_proof(chained, sequence)
+
+    def migrate_to_chain(self, branch: Optional[str] = None) -> int:
+        """
+        Migrate legacy intents to chain format.
+
+        Args:
+            branch: Branch to migrate. If None, uses current branch.
+
+        Returns:
+            Number of intents migrated
+        """
+        from .merkle import chain_intents
+
+        # Load plain intents
+        intents = self.load_intents(branch)
+        if not intents:
+            return 0
+
+        # Chain them
+        chained = chain_intents(intents)
+
+        # Save with chain data
+        self.save_chained_intents(chained, branch)
+
+        return len(chained)
+
+    # =========================================================================
+    # Key Management Methods
+    # =========================================================================
+
+    def get_key_manager(self) -> "KeyManager":
+        """Get the KeyManager for this project."""
+        from .crypto import KeyManager
+        return KeyManager(self.intentlog_dir)
+
+    def has_signing_keys(self) -> bool:
+        """Check if signing keys are configured."""
+        try:
+            km = self.get_key_manager()
+            return km.has_keys()
+        except Exception:
+            return False
+
+    def verify_intent_signature(
+        self,
+        chained: "ChainedIntent",
+    ) -> bool:
+        """
+        Verify a chained intent's signature.
+
+        Args:
+            chained: ChainedIntent with signature
+
+        Returns:
+            True if signature is valid
+
+        Raises:
+            SignatureError: If signature is invalid
+            KeyNotFoundError: If signing key not found
+        """
+        from .crypto import KeyManager, Signature, verify_intent_signature
+
+        if not chained.signature:
+            raise StorageError("Intent has no signature")
+
+        key_manager = KeyManager(self.intentlog_dir)
+        signature = Signature.from_dict(chained.signature)
+
+        signable = {
+            "intent_id": chained.intent.intent_id,
+            "intent_hash": chained.intent_hash,
+            "prev_hash": chained.prev_hash,
+            "chain_hash": chained.chain_hash,
+            "sequence": chained.sequence,
+        }
+
+        return verify_intent_signature(signable, signature, key_manager)

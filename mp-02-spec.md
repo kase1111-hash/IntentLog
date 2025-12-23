@@ -266,13 +266,13 @@ Features required for basic IntentLog functionality.
 |---------|--------|-------------|--------|
 | Persistent storage | INTEGRATION.md | Save/load intent logs to `.intentlog/` directory | **Implemented** |
 | Prose commits with hashes | README.md | Timestamped commits with SHA-256 hashes | **Implemented** |
-| Merkle tree integrity | README.md | Hash-chain for tamper-evident history | **Partial** (per-intent hashes, no chain linking) |
+| Merkle tree integrity | README.md | Hash-chain for tamper-evident history | **Implemented** (prev_hash linking, chain verification) |
 | Intent branching | README.md | Create experimental branches for alternatives | **Implemented** |
 | Merge via explanation | README.md | Resolve conflicts with narrative commits | **Implemented** |
 | Precedent trails | README.md | Reference chains between commits (case law) | **Implemented** (parent_id supported) |
 | File attachment | README.md | `--attach` to link code/files to commits | **Implemented** |
-| Cryptographic signatures | Prior-Art.md | Ed25519/GPG signatures for intents | **Not Implemented** |
-| Key management | Plan 2 | Generate, export, manage signing keys | **Not Implemented** |
+| Cryptographic signatures | Prior-Art.md | Ed25519/GPG signatures for intents | **Implemented** (Ed25519 via `--sign`) |
+| Key management | Plan 2 | Generate, export, manage signing keys | **Implemented** (`ilog keys` commands) |
 
 ### Category B: LLM-Powered Features (Priority: High)
 
@@ -301,7 +301,7 @@ Components defined in MP-02 specification sections 4-12.
 | Ledger anchoring | Section 9 | Append-only, time-ordered log | **Implemented** |
 | Third-party verification | Section 10 | Recompute hashes, verify inclusion | **Implemented** |
 | Failure mode recording | Section 11 | Track gaps, conflicts, manipulation | **Implemented** |
-| Privacy controls | Section 12 | Encryption, access control, revocation | **Not Implemented** (planned) |
+| Privacy controls | Section 12 | Encryption, access control, revocation | **Implemented** |
 
 ### Category D: Advanced Use Cases (Priority: Medium)
 
@@ -309,14 +309,14 @@ Features from Advanced-Use-Cases.md for production deployments.
 
 | Feature | Description | Status |
 |---------|-------------|--------|
-| `@intent_logger` decorator | Automatic nested intent tracing for functions | **Not Implemented** |
-| Context management | Thread-local/async storage for current intent | **Not Implemented** |
+| `@intent_logger` decorator | Automatic nested intent tracing for functions | **Implemented** |
+| Context management | Thread-local/async storage for current intent | **Implemented** |
 | Eval set generation | Export intents as ground truth for evaluation | **Implemented** |
 | Latency tracking | Timestamp start/end for bottleneck discovery | **Implemented** |
 | Human-in-the-loop triggers | Show intent before sensitive operations | **Not Implemented** |
 | Fine-tuning data pipeline | Filter logs for model training data | **Implemented** |
-| `session_id` context | Trace user journeys across sessions | **Not Implemented** |
-| Conditional logging levels | Granular vs high-level by environment | **Not Implemented** |
+| `session_id` context | Trace user journeys across sessions | **Implemented** |
+| Conditional logging levels | Granular vs high-level by environment | **Implemented** |
 
 ### Category E: Doctrine of Intent Metrics (Priority: Complete)
 
@@ -355,21 +355,13 @@ The following features are documented but not yet implemented:
 
 | Feature | Source | Files Needed | Description |
 |---------|--------|--------------|-------------|
-| Merkle tree chain | README.md | `merkle.py` | Link intent hashes to form tamper-evident chain |
-| Cryptographic signatures | Prior-Art.md | `crypto.py` | Ed25519/GPG signing of intents |
-| Key management | Plan 2 | `crypto.py` | CLI commands: `ilog keys generate/export` |
-| Privacy controls | MP-02 §12 | `privacy.py` | Encryption, access control, revocation |
 | Deferred formalization | README.md | `semantic.py` | LLM derives code/rules from prose |
 
 ### Medium Priority (Advanced Features)
 
 | Feature | Source | Files Needed | Description |
 |---------|--------|--------------|-------------|
-| `@intent_logger` decorator | Advanced-Use-Cases.md | `decorator.py` | Automatic nested intent tracing |
-| Context management | Advanced-Use-Cases.md | `context.py` | Thread-local/async intent context |
 | HITL triggers | Advanced-Use-Cases.md | `triggers.py` | Show intent before sensitive ops |
-| `session_id` context | Advanced-Use-Cases.md | `context.py` | Cross-session journey tracing |
-| Conditional logging levels | Advanced-Use-Cases.md | `decorator.py` | Environment-based granularity |
 | LLM-based classification | INTEGRATION.md | `integrations/` | Replace keyword-based classification |
 
 ### Future/Infrastructure
@@ -766,10 +758,10 @@ Implement Intent Sufficiency Test per Doctrine-of-intent.md.
 | Phase | Plans | Description | Status | Notes |
 |-------|-------|-------------|--------|-------|
 | 1 | 1 | Core CLI, Storage, Branching | **Complete** | All CLI commands working |
-| 2 | 2 (partial) | Cryptographic Integrity | **Partial** | Per-intent hashes only, no chain or signatures |
+| 2 | 2 | Cryptographic Integrity | **Complete** | Merkle chain, Ed25519 signatures, key management |
 | 3 | 3 | LLM Integration | **Complete** | OpenAI, Anthropic, Ollama providers |
 | 4 | 4, 5 | MP-02 Protocol | **Complete** | Observer, Validator, Receipts, Ledger |
-| 5 | 6 | Decorator & Context | **Not Started** | `@intent_logger` not implemented |
+| 5 | 6 | Decorator & Context | **Complete** | `@intent_logger`, context management, session tracking |
 | 6 | 7, 8 | Analytics & Metrics | **Complete** | Export, Analytics, Sufficiency Test |
 | 7 | Category F | Infrastructure Expansion | **Future** | External anchoring, TPM, multi-lang |
 
@@ -824,30 +816,35 @@ This section provides a consolidated reference to all project documentation and 
 ### Verified Implementation Status (December 23, 2025)
 
 **Phase 1 Complete** - Core CLI and storage implemented.
-**Phase 2 Partial** - Per-intent hashes implemented; Merkle chain and signatures NOT implemented.
+**Phase 2 Complete** - Merkle chain linking (`prev_hash`), Ed25519 signatures, key management.
 **Phase 3 Complete** - LLM integration with semantic features.
 **Phase 4 Complete** - MP-02 Protocol components implemented.
-**Phase 5 Not Started** - `@intent_logger` decorator NOT implemented.
+**Phase 5 Complete** - `@intent_logger` decorator, context management, session tracking.
 **Phase 6 Complete** - Analytics and metrics implemented.
+**Phase 7 Complete** - Privacy controls: encryption, access control, revocation (MP-02 §12).
 
-**Total: 203 tests passing**
+**Total: 383 tests passing** (336 previous + 47 privacy controls)
+
+### New CLI Commands (Phase 2)
+
+- `ilog keys generate [--name NAME] [--password PASS]` - Generate Ed25519 key pair
+- `ilog keys list` - List available signing keys
+- `ilog keys export [--name NAME] [--output FILE]` - Export public key
+- `ilog keys default [--name NAME]` - Get or set default signing key
+- `ilog chain verify [--branch BRANCH]` - Verify chain integrity
+- `ilog chain migrate [--branch BRANCH]` - Migrate legacy intents to chain format
+- `ilog chain status [--branch BRANCH]` - Show chain status
+- `ilog chain proof --sequence N [--branch BRANCH]` - Generate inclusion proof
+- `ilog commit MESSAGE [--sign]` - Create signed commit
 
 ### Outstanding Unimplemented Features
 
 The following features are documented across project documentation but have no implementation:
 
-1. **Merkle tree hash chain** - Individual hashes exist, but no chain linking (`prev_hash`)
-2. **Cryptographic signatures** - No Ed25519/GPG signing capability
-3. **Key management** - No `ilog keys` commands
-4. **`@intent_logger` decorator** - Mentioned in Advanced-Use-Cases.md, not implemented
-5. **Context management** - No thread-local or async context for intents
-6. **Privacy controls** - No encryption, access control, or revocation
-7. **Deferred formalization** - LLM-derived code from prose not implemented
-8. **HITL triggers** - No human-in-the-loop integration
-9. **session_id context** - Cross-session tracking not implemented
-10. **Conditional logging levels** - No environment-based granularity
-11. **LLM-based classification** - Only keyword-based classification exists
-12. **External anchoring** - No Bitcoin/Ethereum timestamping
+1. **Deferred formalization** - LLM-derived code from prose not implemented
+2. **HITL triggers** - No human-in-the-loop integration
+3. **LLM-based classification** - Only keyword-based classification exists
+4. **External anchoring** - No Bitcoin/Ethereum timestamping
 
 ---
 
@@ -912,6 +909,40 @@ The following features are documented across project documentation but have no i
 - **Sufficiency Test** - 5-criteria test per Doctrine-of-intent.md (`sufficiency.py`)
 - **CLI Commands** - `ilog export`, `ilog analytics`, `ilog metrics`, `ilog sufficiency`
 
+**Phase 5 - Decorator & Context:**
+- **Context Module** - IntentContext, SessionContext, contextvars-based tracking (`context.py`)
+- **Intent Context Manager** - Thread-local and async-safe context for intent tracking
+- **Session Context Manager** - Session-level context for user journey tracking
+- **@intent_logger Decorator** - Automatic function entry/exit logging (`decorator.py`)
+- **Class Decorator** - `@intent_logger_class` for all methods
+- **Log Levels** - DEBUG, INFO, IMPORTANT, CRITICAL, OFF
+- **Conditional Logging** - Environment-based granularity via log levels
+- **Persistence Option** - Persist decorated intents to storage
+- **Async Support** - Full async/await support for decorated functions
+
+**Phase 5 Extended - Advanced Context Features:**
+- **Context Serialization** - `serialize()` / `deserialize()` for cross-process propagation
+- **W3C Trace Headers** - `to_trace_headers()` / `from_trace_headers()` for distributed tracing
+- **Context Hooks** - `register_on_enter_hook()` / `register_on_exit_hook()` for callbacks
+- **Tags & Labels** - `add_tag()`, `set_label()`, `get_all_tags()`, `get_all_labels()`
+- **Context Timeout** - `timeout_seconds` parameter with `is_timed_out` property
+- **Context Status** - ContextStatus enum (ACTIVE, COMPLETED, FAILED, TIMEOUT, CANCELLED)
+- **Enhanced Manager** - `EnhancedIntentContextManager` with hooks, tags, labels, timeouts
+- **Environment Propagation** - `propagate_context_to_env()` / `restore_context_from_env()`
+- **Query Functions** - `get_root_context()`, `get_trace_id()`, `get_span_id()`, `has_tag_in_chain()`
+- **Decorators** - `@with_tags()` and `@with_labels()` for context annotation
+
+**Phase 7 - Privacy Controls (MP-02 Section 12):**
+- **Encryption Module** - Fernet (AES-128-CBC with HMAC) symmetric encryption (`privacy.py`)
+- **PrivacyLevel** - PUBLIC, INTERNAL, CONFIDENTIAL, SECRET, TOP_SECRET levels
+- **AccessPolicy** - Read, write, admin permissions with user access lists
+- **EncryptionKey** - Key generation, password derivation (PBKDF2), expiration
+- **IntentEncryptor** - Encrypt/decrypt intent fields (reasoning, metadata)
+- **EncryptionKeyManager** - Store keys in .intentlog/keys/encryption/
+- **RevocationRecord** - Track revocations per MP-02 Section 12
+- **RevocationManager** - Revoke observation, intents, sessions, users
+- **PrivacyManager** - High-level API combining encryption, access, revocation
+
 **Test Coverage:**
 - `test_storage.py`: 27 tests for storage module
 - `test_cli_integration.py`: 21 tests for CLI end-to-end
@@ -920,8 +951,11 @@ The following features are documented across project documentation but have no i
 - `test_integrations.py`: 9 tests for Memory Vault
 - `test_llm.py`: 29 tests for LLM module
 - `test_mp02.py`: 53 tests for MP-02 protocol components
+- `test_phase2.py`: 53 tests for cryptographic integrity
 - `test_phase4.py`: 45 tests for analytics and metrics
-- **Total: 203 tests passing**
+- `test_phase5.py`: 80 tests for decorator, context, and extended features
+- `test_privacy.py`: 47 tests for privacy controls
+- **Total: 383 tests passing**
 
 ### Known Issues
 
