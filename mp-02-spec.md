@@ -823,7 +823,7 @@ This section provides a consolidated reference to all project documentation and 
 **Phase 5 Complete** - `@intent_logger` decorator, context management, session tracking.
 **Phase 6 Complete** - Analytics and metrics implemented.
 
-**Total: 300 tests passing** (256 previous + 44 Phase 5)
+**Total: 336 tests passing** (300 Phase 5 base + 36 extended context features)
 
 ### New CLI Commands (Phase 2)
 
@@ -921,6 +921,18 @@ The following features are documented across project documentation but have no i
 - **Persistence Option** - Persist decorated intents to storage
 - **Async Support** - Full async/await support for decorated functions
 
+**Phase 5 Extended - Advanced Context Features:**
+- **Context Serialization** - `serialize()` / `deserialize()` for cross-process propagation
+- **W3C Trace Headers** - `to_trace_headers()` / `from_trace_headers()` for distributed tracing
+- **Context Hooks** - `register_on_enter_hook()` / `register_on_exit_hook()` for callbacks
+- **Tags & Labels** - `add_tag()`, `set_label()`, `get_all_tags()`, `get_all_labels()`
+- **Context Timeout** - `timeout_seconds` parameter with `is_timed_out` property
+- **Context Status** - ContextStatus enum (ACTIVE, COMPLETED, FAILED, TIMEOUT, CANCELLED)
+- **Enhanced Manager** - `EnhancedIntentContextManager` with hooks, tags, labels, timeouts
+- **Environment Propagation** - `propagate_context_to_env()` / `restore_context_from_env()`
+- **Query Functions** - `get_root_context()`, `get_trace_id()`, `get_span_id()`, `has_tag_in_chain()`
+- **Decorators** - `@with_tags()` and `@with_labels()` for context annotation
+
 **Test Coverage:**
 - `test_storage.py`: 27 tests for storage module
 - `test_cli_integration.py`: 21 tests for CLI end-to-end
@@ -931,8 +943,8 @@ The following features are documented across project documentation but have no i
 - `test_mp02.py`: 53 tests for MP-02 protocol components
 - `test_phase2.py`: 53 tests for cryptographic integrity
 - `test_phase4.py`: 45 tests for analytics and metrics
-- `test_phase5.py`: 44 tests for decorator and context
-- **Total: 300 tests passing**
+- `test_phase5.py`: 80 tests for decorator, context, and extended features
+- **Total: 336 tests passing**
 
 ### Known Issues
 

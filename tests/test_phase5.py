@@ -12,8 +12,9 @@ import pytest
 import asyncio
 import tempfile
 import time
+import os
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from intentlog.context import (
     IntentContext,
@@ -655,3 +656,443 @@ class TestPersistence:
                 assert len(chained) >= 1
             finally:
                 os.chdir(old_cwd)
+
+
+# ============================================================================
+# Extended Context Management Tests
+# ============================================================================
+
+from intentlog.context import (
+    ContextStatus,
+    EnhancedIntentContextManager,
+    intent_scope_enhanced,
+    register_on_enter_hook,
+    register_on_exit_hook,
+    unregister_on_enter_hook,
+    unregister_on_exit_hook,
+    clear_hooks,
+    propagate_context_to_env,
+    restore_context_from_env,
+    get_all_tags,
+    get_all_labels,
+    has_tag_in_chain,
+    get_root_context,
+    get_trace_id,
+    get_span_id,
+    with_tags,
+    with_labels,
+    INTENT_CONTEXT_ENV_VAR,
+)
+
+
+class TestContextStatus:
+    """Tests for ContextStatus enum"""
+
+    def test_status_values(self):
+        """ContextStatus has expected values"""
+        assert ContextStatus.ACTIVE.value == "active"
+        assert ContextStatus.COMPLETED.value == "completed"
+        assert ContextStatus.FAILED.value == "failed"
+        assert ContextStatus.TIMEOUT.value == "timeout"
+        assert ContextStatus.CANCELLED.value == "cancelled"
+
+
+class TestIntentContextTags:
+    """Tests for tags and labels on IntentContext"""
+
+    def setup_method(self):
+        set_current_intent(None)
+
+    def test_add_single_tag(self):
+        """Add single tag to context"""
+        with intent_scope("tagged") as ctx:
+            ctx.add_tag("api")
+            assert ctx.has_tag("api")
+            assert "api" in ctx.tags
+
+    def test_add_multiple_tags(self):
+        """Add multiple tags to context"""
+        with intent_scope("tagged") as ctx:
+            ctx.add_tags("api", "external", "critical")
+            assert ctx.has_tag("api")
+            assert ctx.has_tag("external")
+            assert ctx.has_tag("critical")
+
+    def test_set_label(self):
+        """Set label on context"""
+        with intent_scope("labeled") as ctx:
+            ctx.set_label("service", "payment")
+            assert ctx.get_label("service") == "payment"
+
+    def test_get_label_default(self):
+        """Get label with default value"""
+        with intent_scope("labeled") as ctx:
+            assert ctx.get_label("missing") is None
+            assert ctx.get_label("missing", "default") == "default"
+
+    def test_tags_in_to_dict(self):
+        """Tags appear in to_dict output"""
+        with intent_scope("tagged") as ctx:
+            ctx.add_tags("a", "b")
+            ctx.set_label("k", "v")
+            d = ctx.to_dict()
+            assert set(d["tags"]) == {"a", "b"}
+            assert d["labels"] == {"k": "v"}
+
+
+class TestContextSerialization:
+    """Tests for context serialization/deserialization"""
+
+    def setup_method(self):
+        set_current_intent(None)
+
+    def test_serialize_deserialize(self):
+        """Context can be serialized and deserialized"""
+        with intent_scope("original") as ctx:
+            ctx.add_tags("tag1", "tag2")
+            ctx.set_label("key", "value")
+            encoded = ctx.serialize()
+
+        restored = IntentContext.deserialize(encoded)
+        assert restored.intent_id == ctx.intent_id
+        assert restored.intent_name == "original"
+        assert "tag1" in restored.tags
+        assert "tag2" in restored.tags
+        assert restored.labels["key"] == "value"
+
+    def test_trace_headers(self):
+        """Generate W3C trace headers"""
+        with intent_scope("traced") as ctx:
+            headers = ctx.to_trace_headers()
+            assert "traceparent" in headers
+            assert headers["x-intent-name"] == "traced"
+            assert ctx.trace_id in headers["traceparent"]
+            assert ctx.span_id in headers["traceparent"]
+
+    def test_from_trace_headers(self):
+        """Create context from trace headers"""
+        headers = {
+            "traceparent": "00-abcdef1234567890abcdef1234567890-1234567890abcdef-01",
+            "x-intent-name": "received",
+            "x-session-id": "session123",
+        }
+        ctx = IntentContext.from_trace_headers(headers)
+        assert ctx.trace_id == "abcdef1234567890abcdef1234567890"
+        assert ctx.intent_name == "received"
+        assert ctx.session_id == "session123"
+
+
+class TestContextStatusManagement:
+    """Tests for context status management"""
+
+    def setup_method(self):
+        set_current_intent(None)
+
+    def test_context_starts_active(self):
+        """Context starts in active status"""
+        with intent_scope("active") as ctx:
+            assert ctx.status == ContextStatus.ACTIVE
+            assert ctx.is_active
+
+    def test_context_completes(self):
+        """Context completes on exit"""
+        with intent_scope_enhanced("completing") as ctx:
+            pass
+        assert ctx.status == ContextStatus.COMPLETED
+        assert ctx.end_time is not None
+
+    def test_context_fails_on_exception(self):
+        """Context fails on exception"""
+        try:
+            with intent_scope_enhanced("failing") as ctx:
+                raise ValueError("test error")
+        except ValueError:
+            pass
+        assert ctx.status == ContextStatus.FAILED
+        assert "test error" in ctx.metadata.get("error", "")
+
+    def test_manual_complete(self):
+        """Context can be manually completed"""
+        ctx = IntentContext(intent_id="test", intent_name="manual")
+        ctx.complete()
+        assert ctx.status == ContextStatus.COMPLETED
+        assert ctx.end_time is not None
+
+    def test_manual_fail(self):
+        """Context can be manually failed"""
+        ctx = IntentContext(intent_id="test", intent_name="manual")
+        ctx.fail("manual error")
+        assert ctx.status == ContextStatus.FAILED
+        assert ctx.metadata["error"] == "manual error"
+
+
+class TestContextTimeout:
+    """Tests for context timeout"""
+
+    def setup_method(self):
+        set_current_intent(None)
+
+    def test_timeout_not_expired(self):
+        """Context not timed out before deadline"""
+        with intent_scope_enhanced("quick", timeout_seconds=60) as ctx:
+            assert not ctx.is_timed_out
+            assert ctx.is_active
+
+    def test_is_timed_out_property(self):
+        """is_timed_out returns True after deadline"""
+        ctx = IntentContext(intent_id="test", intent_name="timeout")
+        ctx.timeout_at = datetime.now() - timedelta(seconds=1)
+        assert ctx.is_timed_out
+        assert not ctx.is_active
+
+
+class TestContextHooks:
+    """Tests for context hooks system"""
+
+    def setup_method(self):
+        set_current_intent(None)
+        clear_hooks()
+
+    def teardown_method(self):
+        clear_hooks()
+
+    def test_on_enter_hook(self):
+        """On enter hook is called"""
+        entered = []
+
+        def on_enter(ctx):
+            entered.append(ctx.intent_name)
+
+        register_on_enter_hook(on_enter)
+
+        with intent_scope_enhanced("hooked"):
+            pass
+
+        assert "hooked" in entered
+
+    def test_on_exit_hook(self):
+        """On exit hook is called"""
+        exited = []
+
+        def on_exit(ctx, error):
+            exited.append((ctx.intent_name, error))
+
+        register_on_exit_hook(on_exit)
+
+        with intent_scope_enhanced("hooked"):
+            pass
+
+        assert ("hooked", None) in exited
+
+    def test_on_exit_hook_with_error(self):
+        """On exit hook receives error"""
+        exited = []
+
+        def on_exit(ctx, error):
+            exited.append((ctx.intent_name, type(error).__name__ if error else None))
+
+        register_on_exit_hook(on_exit)
+
+        try:
+            with intent_scope_enhanced("failing"):
+                raise ValueError("test")
+        except ValueError:
+            pass
+
+        assert ("failing", "ValueError") in exited
+
+    def test_unregister_hook(self):
+        """Hooks can be unregistered"""
+        called = []
+
+        def hook(ctx):
+            called.append(1)
+
+        register_on_enter_hook(hook)
+        assert unregister_on_enter_hook(hook)
+
+        with intent_scope_enhanced("test"):
+            pass
+
+        assert len(called) == 0
+
+    def test_local_hooks(self):
+        """Context manager accepts local hooks"""
+        entered = []
+        exited = []
+
+        with intent_scope_enhanced(
+            "local",
+            on_enter=lambda ctx: entered.append(ctx.intent_name),
+            on_exit=lambda ctx, err: exited.append(ctx.intent_name),
+        ):
+            pass
+
+        assert "local" in entered
+        assert "local" in exited
+
+
+class TestEnhancedContextManager:
+    """Tests for EnhancedIntentContextManager"""
+
+    def setup_method(self):
+        set_current_intent(None)
+        clear_hooks()
+
+    def test_enhanced_with_tags(self):
+        """Enhanced manager supports tags"""
+        with intent_scope_enhanced("tagged", tags={"a", "b"}) as ctx:
+            assert ctx.has_tag("a")
+            assert ctx.has_tag("b")
+
+    def test_enhanced_with_labels(self):
+        """Enhanced manager supports labels"""
+        with intent_scope_enhanced("labeled", labels={"k": "v"}) as ctx:
+            assert ctx.get_label("k") == "v"
+
+    def test_enhanced_with_timeout(self):
+        """Enhanced manager supports timeout"""
+        with intent_scope_enhanced("timed", timeout_seconds=60) as ctx:
+            assert ctx.timeout_at is not None
+            assert not ctx.is_timed_out
+
+
+class TestEnvironmentPropagation:
+    """Tests for environment variable propagation"""
+
+    def setup_method(self):
+        set_current_intent(None)
+        if INTENT_CONTEXT_ENV_VAR in os.environ:
+            del os.environ[INTENT_CONTEXT_ENV_VAR]
+
+    def teardown_method(self):
+        if INTENT_CONTEXT_ENV_VAR in os.environ:
+            del os.environ[INTENT_CONTEXT_ENV_VAR]
+
+    def test_propagate_to_env(self):
+        """Context is propagated to environment"""
+        with intent_scope("propagated") as ctx:
+            propagate_context_to_env()
+            assert INTENT_CONTEXT_ENV_VAR in os.environ
+
+    def test_restore_from_env(self):
+        """Context is restored from environment"""
+        with intent_scope("original") as ctx:
+            ctx.add_tag("test-tag")
+            propagate_context_to_env()
+
+        set_current_intent(None)
+        restored = restore_context_from_env()
+
+        assert restored is not None
+        assert restored.intent_name == "original"
+        assert "test-tag" in restored.tags
+
+
+class TestContextQueryFunctions:
+    """Tests for context query functions"""
+
+    def setup_method(self):
+        set_current_intent(None)
+
+    def test_get_all_tags(self):
+        """Get all tags from chain"""
+        with intent_scope("outer") as outer:
+            outer.add_tag("outer-tag")
+            with intent_scope("inner") as inner:
+                inner.add_tag("inner-tag")
+                tags = get_all_tags()
+                assert "outer-tag" in tags
+                assert "inner-tag" in tags
+
+    def test_get_all_labels(self):
+        """Get all labels from chain"""
+        with intent_scope("outer") as outer:
+            outer.set_label("env", "prod")
+            with intent_scope("inner") as inner:
+                inner.set_label("service", "api")
+                labels = get_all_labels()
+                assert labels["env"] == "prod"
+                assert labels["service"] == "api"
+
+    def test_has_tag_in_chain(self):
+        """Check tag existence in chain"""
+        with intent_scope("outer") as outer:
+            outer.add_tag("parent-tag")
+            with intent_scope("inner"):
+                assert has_tag_in_chain("parent-tag")
+                assert not has_tag_in_chain("nonexistent")
+
+    def test_get_root_context(self):
+        """Get root context from chain"""
+        with intent_scope("root") as root:
+            with intent_scope("child"):
+                with intent_scope("grandchild"):
+                    found = get_root_context()
+                    assert found is not None
+                    assert found.intent_name == "root"
+
+    def test_get_trace_id(self):
+        """Get trace ID from current context"""
+        assert get_trace_id() is None
+
+        with intent_scope("traced") as ctx:
+            assert get_trace_id() == ctx.trace_id
+
+    def test_get_span_id(self):
+        """Get span ID from current context"""
+        assert get_span_id() is None
+
+        with intent_scope("spanned") as ctx:
+            assert get_span_id() == ctx.span_id
+
+
+class TestContextDecorators:
+    """Tests for context decorators"""
+
+    def setup_method(self):
+        set_current_intent(None)
+
+    def test_with_tags_decorator(self):
+        """@with_tags adds tags to context"""
+        @with_tags("decorated", "tagged")
+        def my_func():
+            ctx = get_current_intent()
+            return ctx.tags if ctx else set()
+
+        with intent_scope("outer") as ctx:
+            tags = my_func()
+            assert "decorated" in ctx.tags
+            assert "tagged" in ctx.tags
+
+    def test_with_labels_decorator(self):
+        """@with_labels adds labels to context"""
+        @with_labels(service="test", version="1.0")
+        def my_func():
+            ctx = get_current_intent()
+            return ctx.labels if ctx else {}
+
+        with intent_scope("outer") as ctx:
+            my_func()
+            assert ctx.get_label("service") == "test"
+            assert ctx.get_label("version") == "1.0"
+
+
+class TestDistributedTracing:
+    """Tests for distributed tracing support"""
+
+    def setup_method(self):
+        set_current_intent(None)
+
+    def test_trace_id_propagates(self):
+        """Trace ID propagates to children"""
+        with intent_scope("parent") as parent:
+            with intent_scope("child") as child:
+                assert child.trace_id == parent.trace_id
+                assert child.span_id != parent.span_id
+
+    def test_parent_span_id(self):
+        """Parent span ID is accessible"""
+        with intent_scope("parent") as parent:
+            with intent_scope("child") as child:
+                assert child.parent_span_id == parent.span_id
