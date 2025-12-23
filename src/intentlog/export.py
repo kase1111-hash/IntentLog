@@ -21,6 +21,42 @@ import uuid
 from .core import Intent
 
 
+# ReDoS protection constants
+MAX_REGEX_INPUT_LENGTH = 10000  # Max chars to match against
+REGEX_COMPILE_CACHE: Dict[str, Any] = {}
+
+
+def safe_regex_match(pattern: str, text: str, flags: int = 0) -> bool:
+    """
+    Safely match a regex pattern against text with ReDoS protection.
+
+    Args:
+        pattern: Regex pattern to match
+        text: Text to match against
+        flags: Regex flags (e.g., re.IGNORECASE)
+
+    Returns:
+        True if pattern matches, False otherwise
+
+    Raises:
+        ValueError: If pattern is invalid
+    """
+    # Limit input length to prevent catastrophic backtracking
+    if len(text) > MAX_REGEX_INPUT_LENGTH:
+        text = text[:MAX_REGEX_INPUT_LENGTH]
+
+    # Cache compiled patterns for performance
+    cache_key = f"{pattern}:{flags}"
+    if cache_key not in REGEX_COMPILE_CACHE:
+        try:
+            REGEX_COMPILE_CACHE[cache_key] = re.compile(pattern, flags)
+        except re.error as e:
+            raise ValueError(f"Invalid regex pattern: {e}")
+
+    compiled = REGEX_COMPILE_CACHE[cache_key]
+    return compiled.search(text) is not None
+
+
 @dataclass
 class ExportFilter:
     """
@@ -71,15 +107,21 @@ class ExportFilter:
             if not any(tag in intent_tags for tag in self.tags):
                 return False
 
-        # Name pattern
+        # Name pattern (with ReDoS protection)
         if self.name_pattern:
-            if not re.search(self.name_pattern, intent.intent_name, re.IGNORECASE):
-                return False
+            try:
+                if not safe_regex_match(self.name_pattern, intent.intent_name, re.IGNORECASE):
+                    return False
+            except ValueError:
+                return False  # Invalid pattern never matches
 
-        # Reasoning pattern
+        # Reasoning pattern (with ReDoS protection)
         if self.reasoning_pattern:
-            if not re.search(self.reasoning_pattern, intent.intent_reasoning, re.IGNORECASE):
-                return False
+            try:
+                if not safe_regex_match(self.reasoning_pattern, intent.intent_reasoning, re.IGNORECASE):
+                    return False
+            except ValueError:
+                return False  # Invalid pattern never matches
 
         # Parent filter
         if self.has_parent is not None:
