@@ -20,19 +20,19 @@ setup(
         "Development Status :: 3 - Alpha",
         "Intended Audience :: Developers",
         "Topic :: Software Development :: Version Control",
-        "License :: OSI Approved :: MIT License",
+        "License :: Other/Proprietary License",  # CC BY-SA 4.0
         "Programming Language :: Python :: 3",
         "Programming Language :: Python :: 3.8",
         "Programming Language :: Python :: 3.9",
         "Programming Language :: Python :: 3.10",
         "Programming Language :: Python :: 3.11",
     ],
+    license="CC-BY-SA-4.0",
     python_requires=">=3.8",
-    install_requires=[
-        "pytest>=7.4.0",
-    ],
+    install_requires=[],
     extras_require={
         "dev": [
+            "pytest>=7.4.0",
             "pytest-cov>=4.1.0",
         ],
     },

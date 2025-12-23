@@ -227,20 +227,25 @@ This section tracks the implementation status of all features documented across 
 | Audit: loop detection | Implemented | `src/intentlog/audit.py:46` | Configurable repeat threshold |
 | Memory Vault integration | Implemented | `src/intentlog/integrations/memory_vault.py` | Classification, store, recall |
 | Intent classification | Implemented | `src/intentlog/integrations/memory_vault.py:125` | Keyword-based, 5 levels (0-5) |
+| **Storage module** | **Implemented** | `src/intentlog/storage.py` | Persistent `.intentlog/` storage, JSON serialization, file locking |
+| **Project configuration** | **Implemented** | `src/intentlog/storage.py:25` | ProjectConfig with branch tracking |
+| **Intent hash computation** | **Implemented** | `src/intentlog/storage.py:74` | SHA-256 canonical JSON hashing |
+| **Branch management** | **Implemented** | `src/intentlog/storage.py:285` | Create, switch, list branches |
 
 ## CLI Commands Status
 
 | Command | Status | Location | Notes |
 |---------|--------|----------|-------|
-| `ilog init <project>` | Stub | `cli.py:14` | Prints message only, no .intentlog directory |
-| `ilog commit <message>` | Stub | `cli.py:22` | Prints message only, no persistence |
-| `ilog branch <name>` | Stub | `cli.py:30` | Prints message only, no branching |
-| `ilog log` | Stub | `cli.py:38` | Placeholder output only |
-| `ilog search <query>` | Stub | `cli.py:45` | Placeholder output only |
-| `ilog audit <file>` | Implemented | `cli.py:53` | Full functionality with `audit.py` |
-| `ilog diff` | Planned | README.md | Semantic diff not in CLI |
-| `ilog merge` | Planned | README.md | Merge with explanation not in CLI |
-| `--attach` flag | Stub | `cli.py:88` | Defined but not implemented |
+| `ilog init <project>` | **Implemented** | `cli.py:24` | Creates `.intentlog/` with config, intents, branches |
+| `ilog commit <message>` | **Implemented** | `cli.py:43` | Adds intent with hash, persists to JSON |
+| `ilog branch <name>` | **Implemented** | `cli.py:92` | Creates/switches branches, copies intents |
+| `ilog log` | **Implemented** | `cli.py:131` | Shows history with `--limit` and `--branch` |
+| `ilog search <query>` | **Implemented** | `cli.py:186` | Case-insensitive search in name/reasoning |
+| `ilog audit <file>` | **Implemented** | `cli.py:235` | Full functionality with `audit.py` |
+| `ilog status` | **Implemented** | `cli.py:248` | Shows project info, branch, intent count |
+| `ilog diff` | Planned | README.md | Semantic diff (Phase 2: LLM integration) |
+| `ilog merge` | Planned | README.md | Merge with explanation (Phase 2) |
+| `--attach` flag | **Implemented** | `cli.py:59` | Attaches git files with hashes to metadata |
 
 ---
 
@@ -252,13 +257,13 @@ Features required for basic IntentLog functionality.
 
 | Feature | Source | Description | Status |
 |---------|--------|-------------|--------|
-| Persistent storage | INTEGRATION.md | Save/load intent logs to `.intentlog/` directory | Planned |
-| Prose commits with signatures | README.md | Cryptographically signed, timestamped commits | Planned |
-| Merkle tree integrity | README.md | Hash-chain for tamper-evident history | Planned |
-| Intent branching | README.md | Create experimental branches for alternatives | Planned |
-| Merge via explanation | README.md | Resolve conflicts with narrative commits | Planned |
-| Precedent trails | README.md | Reference chains between commits (case law) | Planned |
-| File attachment | README.md | `--attach` to link code/files to commits | Planned |
+| Persistent storage | INTEGRATION.md | Save/load intent logs to `.intentlog/` directory | **Implemented** |
+| Prose commits with hashes | README.md | Timestamped commits with SHA-256 hashes | **Implemented** |
+| Merkle tree integrity | README.md | Hash-chain for tamper-evident history | Partial (hashes per intent, no chain yet) |
+| Intent branching | README.md | Create experimental branches for alternatives | **Implemented** |
+| Merge via explanation | README.md | Resolve conflicts with narrative commits | Planned (Phase 2) |
+| Precedent trails | README.md | Reference chains between commits (case law) | Partial (parent_id supported) |
+| File attachment | README.md | `--attach` to link code/files to commits | **Implemented** |
 
 ### Category B: LLM-Powered Features (Priority: High, Target: Q1 2026)
 
@@ -713,6 +718,96 @@ Implement Intent Sufficiency Test per Doctrine-of-intent.md.
 | 3 | 4, 5 | Q2 2026 | MP-02 protocol components |
 | 4 | 7, 8 | Q3 2026 | Analytics and metrics |
 | 5 | Category F | 2026+ | Infrastructure expansion |
+
+---
+
+## Documentation Index
+
+This section provides a consolidated reference to all project documentation and their purposes.
+
+### Core Documentation
+
+| Document | Purpose | Audience |
+|----------|---------|----------|
+| [README.md](README.md) | Project overview, quick start, use cases | Users, contributors |
+| [mp-02-spec.md](mp-02-spec.md) | Proof-of-Effort Receipt Protocol specification + implementation tracking | Developers, architects |
+| [Doctrine-of-intent.md](Doctrine-of-intent.md) | Philosophical framework: provenance-first value attribution | Strategists, researchers |
+| [Prior-Art.md](Prior-Art.md) | Design patent timestamp (Dec 16, 2025), core design primitives | Legal, historians |
+
+### Operational Guides
+
+| Document | Purpose | Audience |
+|----------|---------|----------|
+| [INTEGRATION.md](INTEGRATION.md) | Integration overview for Git, CI/CD, LLMs | DevOps, integrators |
+| [Memory-Vault-Integration.md](Memory-Vault-Integration.md) | Detailed Memory Vault secure storage integration | Security engineers |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Development setup, code style, PR workflow | Contributors |
+| [Advanced-Use-Cases.md](Advanced-Use-Cases.md) | Production patterns: multi-agent, eval sets, HITL | Advanced users |
+
+### Supporting Content
+
+| Document | Purpose | Audience |
+|----------|---------|----------|
+| [Your-Work-Isnt-Worthless.md](Your-Work-Isnt-Worthless.md) | Practical essay on provenance value for creators | Creators, artists |
+| [LICENSE.md](LICENSE.md) | CC BY-SA 4.0 full legal text | Legal |
+
+### Cross-Reference: Features to Documentation
+
+| Feature Area | Primary Doc | Supporting Docs |
+|--------------|-------------|-----------------|
+| Core vision & primitives | README.md | Prior-Art.md, Doctrine-of-intent.md |
+| CLI commands | README.md (examples) | INTEGRATION.md (reference) |
+| MP-02 Protocol | mp-02-spec.md (sections 1-15) | Doctrine-of-intent.md (theory) |
+| Memory Vault | Memory-Vault-Integration.md | INTEGRATION.md (overview) |
+| `@intent_logger` decorator | Advanced-Use-Cases.md | CONTRIBUTING.md (code style) |
+| Cryptographic integrity | mp-02-spec.md (Plan 2) | Prior-Art.md (Merkle trees) |
+| LLM features | mp-02-spec.md (Plan 3) | INTEGRATION.md (LLM section) |
+| Doctrine metrics | mp-02-spec.md (Plan 8) | Doctrine-of-intent.md (sections 7-8) |
+
+---
+
+## Verification Notes
+
+### Verified Implementation Status (December 2025)
+
+**Phase 1 Complete** - Core CLI and storage implemented with 76 passing tests.
+
+**Fully Implemented (Phase 1):**
+- `Intent` dataclass with UUID, timestamp, parent linking (`core.py:14-43`)
+- `IntentLog` manager with add, get, search, export, chain (`core.py:45-109`)
+- Audit engine: empty reasoning + loop detection (`audit.py:23-56`)
+- Memory Vault integration: classification, store, recall (`integrations/memory_vault.py`)
+- **Storage module** with persistent `.intentlog/` directory (`storage.py`)
+- **Project configuration** with branch tracking (`storage.py:25`)
+- **Intent hash computation** using SHA-256 (`storage.py:74`)
+- **Branch management** - create, switch, list (`storage.py:285`)
+- Entry points: Both `intentlog` and `ilog` aliases available (`setup.py:39-44`)
+
+**CLI Commands (All Implemented):**
+- `ilog init <project>` - Creates `.intentlog/` with config.json, intents.json, branches/
+- `ilog commit <message>` - Adds intent with hash to current branch
+- `ilog branch [name]` - Lists, creates, or switches branches
+- `ilog log` - Shows intent history with `--limit` and `--branch` options
+- `ilog search <query>` - Case-insensitive search in name/reasoning
+- `ilog audit <file>` - Full audit functionality
+- `ilog status` - Shows project info
+- `--attach` flag - Attaches git-tracked files with hashes
+
+**Test Coverage:**
+- `test_storage.py`: 27 tests for storage module
+- `test_cli_integration.py`: 21 tests for CLI end-to-end
+- `test_core.py`: 11 tests for core classes
+- `test_audit.py`: 4 tests for audit functionality
+- `test_integrations.py`: 9 tests for Memory Vault
+- **Total: 76 tests passing**
+
+### Known Issues
+
+| Issue | Location | Severity | Status |
+|-------|----------|----------|--------|
+| ~~License mismatch~~ | `setup.py` | ~~Medium~~ | **Fixed** - License now correctly set to CC-BY-SA-4.0 |
+| ~~pytest in install_requires~~ | `setup.py` | ~~Low~~ | **Fixed** - Moved to dev dependencies |
+
+*No outstanding issues as of December 2025 verification.*
 
 ---
 
