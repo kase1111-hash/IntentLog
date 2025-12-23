@@ -1238,16 +1238,16 @@ def cmd_metrics(args):
         print("="*60)
 
         density = all_metrics['intent_density']
-        print(f"\nIntent Density (Di): {density['Di']:.3f}")
-        print(f"  Resolution: {density['resolution']:.3f}")
-        print(f"  Continuity: {density['continuity']:.3f}")
-        print(f"  Coverage: {density['coverage']:.3f}")
+        print(f"\nIntent Density (Di): {density['score']:.3f}")
+        print(f"  Resolution: {density['components']['resolution']:.3f}")
+        print(f"  Continuity: {density['components']['continuity']:.3f}")
+        print(f"  Coverage: {density['components']['coverage']:.3f}")
 
         info = all_metrics['information_density']
-        print(f"\nInformation Density:")
-        print(f"  Avg words: {info['avg_words']:.1f}")
-        print(f"  Avg chars: {info['avg_chars']:.1f}")
-        print(f"  Compression ratio: {info['compression_ratio']:.3f}")
+        print(f"\nInformation Density: {info['overall_score']:.3f}")
+        print(f"  Content depth: {info['components']['content_depth']:.3f}")
+        print(f"  Metadata richness: {info['components']['metadata_richness']:.3f}")
+        print(f"  Avg reasoning words: {info['metrics']['avg_reasoning_words']:.1f}")
 
         audit = all_metrics['auditability']
         print(f"\nAuditability: {audit['score']:.3f} ({audit['rating']})")

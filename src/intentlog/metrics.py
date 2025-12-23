@@ -194,6 +194,7 @@ class AuditabilityScore:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "score": round(self.score, 4),
+            "rating": self.rating,
             "components": {
                 "completeness": round(self.completeness, 4),
                 "traceability": round(self.traceability, 4),
@@ -245,6 +246,7 @@ class FraudResistance:
     def to_dict(self) -> Dict[str, Any]:
         return {
             "score": round(self.score, 4),
+            "rating": self.rating,
             "components": {
                 "temporal_authenticity": round(self.temporal_score, 4),
                 "content_authenticity": round(self.content_score, 4),
