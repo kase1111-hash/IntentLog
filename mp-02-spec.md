@@ -266,13 +266,13 @@ Features required for basic IntentLog functionality.
 |---------|--------|-------------|--------|
 | Persistent storage | INTEGRATION.md | Save/load intent logs to `.intentlog/` directory | **Implemented** |
 | Prose commits with hashes | README.md | Timestamped commits with SHA-256 hashes | **Implemented** |
-| Merkle tree integrity | README.md | Hash-chain for tamper-evident history | **Partial** (per-intent hashes, no chain linking) |
+| Merkle tree integrity | README.md | Hash-chain for tamper-evident history | **Implemented** (prev_hash linking, chain verification) |
 | Intent branching | README.md | Create experimental branches for alternatives | **Implemented** |
 | Merge via explanation | README.md | Resolve conflicts with narrative commits | **Implemented** |
 | Precedent trails | README.md | Reference chains between commits (case law) | **Implemented** (parent_id supported) |
 | File attachment | README.md | `--attach` to link code/files to commits | **Implemented** |
-| Cryptographic signatures | Prior-Art.md | Ed25519/GPG signatures for intents | **Not Implemented** |
-| Key management | Plan 2 | Generate, export, manage signing keys | **Not Implemented** |
+| Cryptographic signatures | Prior-Art.md | Ed25519/GPG signatures for intents | **Implemented** (Ed25519 via `--sign`) |
+| Key management | Plan 2 | Generate, export, manage signing keys | **Implemented** (`ilog keys` commands) |
 
 ### Category B: LLM-Powered Features (Priority: High)
 
@@ -355,9 +355,6 @@ The following features are documented but not yet implemented:
 
 | Feature | Source | Files Needed | Description |
 |---------|--------|--------------|-------------|
-| Merkle tree chain | README.md | `merkle.py` | Link intent hashes to form tamper-evident chain |
-| Cryptographic signatures | Prior-Art.md | `crypto.py` | Ed25519/GPG signing of intents |
-| Key management | Plan 2 | `crypto.py` | CLI commands: `ilog keys generate/export` |
 | Privacy controls | MP-02 §12 | `privacy.py` | Encryption, access control, revocation |
 | Deferred formalization | README.md | `semantic.py` | LLM derives code/rules from prose |
 
@@ -766,7 +763,7 @@ Implement Intent Sufficiency Test per Doctrine-of-intent.md.
 | Phase | Plans | Description | Status | Notes |
 |-------|-------|-------------|--------|-------|
 | 1 | 1 | Core CLI, Storage, Branching | **Complete** | All CLI commands working |
-| 2 | 2 (partial) | Cryptographic Integrity | **Partial** | Per-intent hashes only, no chain or signatures |
+| 2 | 2 | Cryptographic Integrity | **Complete** | Merkle chain, Ed25519 signatures, key management |
 | 3 | 3 | LLM Integration | **Complete** | OpenAI, Anthropic, Ollama providers |
 | 4 | 4, 5 | MP-02 Protocol | **Complete** | Observer, Validator, Receipts, Ledger |
 | 5 | 6 | Decorator & Context | **Not Started** | `@intent_logger` not implemented |
@@ -824,30 +821,39 @@ This section provides a consolidated reference to all project documentation and 
 ### Verified Implementation Status (December 23, 2025)
 
 **Phase 1 Complete** - Core CLI and storage implemented.
-**Phase 2 Partial** - Per-intent hashes implemented; Merkle chain and signatures NOT implemented.
+**Phase 2 Complete** - Merkle chain linking (`prev_hash`), Ed25519 signatures, key management.
 **Phase 3 Complete** - LLM integration with semantic features.
 **Phase 4 Complete** - MP-02 Protocol components implemented.
 **Phase 5 Not Started** - `@intent_logger` decorator NOT implemented.
 **Phase 6 Complete** - Analytics and metrics implemented.
 
-**Total: 203 tests passing**
+**Total: 256 tests passing** (203 original + 53 Phase 2)
+
+### New CLI Commands (Phase 2)
+
+- `ilog keys generate [--name NAME] [--password PASS]` - Generate Ed25519 key pair
+- `ilog keys list` - List available signing keys
+- `ilog keys export [--name NAME] [--output FILE]` - Export public key
+- `ilog keys default [--name NAME]` - Get or set default signing key
+- `ilog chain verify [--branch BRANCH]` - Verify chain integrity
+- `ilog chain migrate [--branch BRANCH]` - Migrate legacy intents to chain format
+- `ilog chain status [--branch BRANCH]` - Show chain status
+- `ilog chain proof --sequence N [--branch BRANCH]` - Generate inclusion proof
+- `ilog commit MESSAGE [--sign]` - Create signed commit
 
 ### Outstanding Unimplemented Features
 
 The following features are documented across project documentation but have no implementation:
 
-1. **Merkle tree hash chain** - Individual hashes exist, but no chain linking (`prev_hash`)
-2. **Cryptographic signatures** - No Ed25519/GPG signing capability
-3. **Key management** - No `ilog keys` commands
-4. **`@intent_logger` decorator** - Mentioned in Advanced-Use-Cases.md, not implemented
-5. **Context management** - No thread-local or async context for intents
-6. **Privacy controls** - No encryption, access control, or revocation
-7. **Deferred formalization** - LLM-derived code from prose not implemented
-8. **HITL triggers** - No human-in-the-loop integration
-9. **session_id context** - Cross-session tracking not implemented
-10. **Conditional logging levels** - No environment-based granularity
-11. **LLM-based classification** - Only keyword-based classification exists
-12. **External anchoring** - No Bitcoin/Ethereum timestamping
+1. **`@intent_logger` decorator** - Mentioned in Advanced-Use-Cases.md, not implemented
+2. **Context management** - No thread-local or async context for intents
+3. **Privacy controls** - No encryption, access control, or revocation
+4. **Deferred formalization** - LLM-derived code from prose not implemented
+5. **HITL triggers** - No human-in-the-loop integration
+6. **session_id context** - Cross-session tracking not implemented
+7. **Conditional logging levels** - No environment-based granularity
+8. **LLM-based classification** - Only keyword-based classification exists
+9. **External anchoring** - No Bitcoin/Ethereum timestamping
 
 ---
 
