@@ -243,9 +243,14 @@ This section tracks the implementation status of all features documented across 
 | `ilog search <query>` | **Implemented** | `cli.py:186` | Case-insensitive search in name/reasoning |
 | `ilog audit <file>` | **Implemented** | `cli.py:235` | Full functionality with `audit.py` |
 | `ilog status` | **Implemented** | `cli.py:248` | Shows project info, branch, intent count |
-| `ilog diff` | **Implemented** | `cli.py:316` | Semantic diff between branches (with LLM) |
-| `ilog merge` | **Implemented** | `cli.py:392` | Merge branches with optional message |
-| `ilog config` | **Implemented** | `cli.py:441` | Configure LLM provider and settings |
+| `ilog diff` | **Implemented** | `cli.py:362` | Semantic diff between branches (with LLM) |
+| `ilog merge` | **Implemented** | `cli.py:438` | Merge branches with optional message |
+| `ilog config` | **Implemented** | `cli.py:1009` | Configure LLM provider and settings |
+| `ilog observe` | **Implemented** | `cli.py:489` | Start/stop observation sessions (MP-02) |
+| `ilog segment` | **Implemented** | `cli.py:576` | Mark segment boundaries (MP-02) |
+| `ilog receipt` | **Implemented** | `cli.py:653` | Generate/view effort receipts (MP-02) |
+| `ilog ledger` | **Implemented** | `cli.py:831` | Manage append-only ledger (MP-02) |
+| `ilog verify` | **Implemented** | `cli.py:920` | Verify integrity of receipts/ledger (MP-02) |
 | `--attach` flag | **Implemented** | `cli.py:59` | Attaches git files with hashes to metadata |
 | `--semantic` flag | **Implemented** | `cli.py:202` | Semantic search using embeddings |
 
@@ -286,14 +291,14 @@ Components defined in MP-02 specification sections 4-12.
 
 | Feature | Spec Section | Description | Status |
 |---------|--------------|-------------|--------|
-| Observer system | Section 5 | Capture raw signals with timestamps | Planned |
-| Validator (LLM-assisted) | Section 7 | Assess coherence and progression | Planned |
-| Effort Segmentation | Section 6 | Group signals into bounded segments | Planned |
-| Receipt construction | Section 8 | Build cryptographic receipts | Planned |
-| Ledger anchoring | Section 9 | Append-only, time-ordered log | Planned |
-| Third-party verification | Section 10 | Recompute hashes, verify inclusion | Planned |
-| Failure mode recording | Section 11 | Track gaps, conflicts, manipulation | Planned |
-| Privacy controls | Section 12 | Encryption, access control, revocation | Planned |
+| Observer system | Section 5 | Capture raw signals with timestamps | **Implemented** |
+| Validator (LLM-assisted) | Section 7 | Assess coherence and progression | **Implemented** |
+| Effort Segmentation | Section 6 | Group signals into bounded segments | **Implemented** |
+| Receipt construction | Section 8 | Build cryptographic receipts | **Implemented** |
+| Ledger anchoring | Section 9 | Append-only, time-ordered log | **Implemented** |
+| Third-party verification | Section 10 | Recompute hashes, verify inclusion | **Implemented** |
+| Failure mode recording | Section 11 | Track gaps, conflicts, manipulation | **Implemented** |
+| Privacy controls | Section 12 | Encryption, access control, revocation | Partial (encryption planned) |
 
 ### Category D: Advanced Use Cases (Priority: Medium)
 
@@ -713,13 +718,13 @@ Implement Intent Sufficiency Test per Doctrine-of-intent.md.
 
 ## Implementation Priority Summary
 
-| Phase | Plans | Target | Description |
-|-------|-------|--------|-------------|
-| 1 | 1, 2 | Immediate | Core functionality: persistence, CLI, crypto |
-| 2 | 3, 6 | Q1 2026 | LLM integration, decorator |
-| 3 | 4, 5 | Q2 2026 | MP-02 protocol components |
-| 4 | 7, 8 | Q3 2026 | Analytics and metrics |
-| 5 | Category F | 2026+ | Infrastructure expansion |
+| Phase | Plans | Target | Description | Status |
+|-------|-------|--------|-------------|--------|
+| 1 | 1, 2 | Immediate | Core functionality: persistence, CLI, crypto | **Complete** |
+| 2 | 3, 6 | Q1 2026 | LLM integration, decorator | **Complete** |
+| 3 | 4, 5 | Q2 2026 | MP-02 protocol components | **Complete** |
+| 4 | 7, 8 | Q3 2026 | Analytics and metrics | Planned |
+| 5 | Category F | 2026+ | Infrastructure expansion | Future |
 
 ---
 
@@ -773,8 +778,9 @@ This section provides a consolidated reference to all project documentation and 
 
 **Phase 1 Complete** - Core CLI and storage implemented.
 **Phase 2 Complete** - LLM integration with semantic features.
+**Phase 3 Complete** - MP-02 Protocol components implemented.
 
-**Total: 105 tests passing**
+**Total: 158 tests passing**
 
 ---
 
@@ -797,6 +803,16 @@ This section provides a consolidated reference to all project documentation and 
 - **Semantic Engine** - Diff, search, merge resolution (`semantic.py`)
 - **Embedding Caching** - Persistent cache for embeddings
 
+**Phase 3 - MP-02 Protocol:**
+- **Signal Types** - Signal, SignalType, SignalSource (`mp02/signal.py`)
+- **Observer System** - TextObserver, CommandObserver, AnnotationObserver (`mp02/observer.py`)
+- **Segmentation Engine** - Time-window, activity boundary, marker-based (`mp02/segmentation.py`)
+- **Validator Framework** - Rule-based and LLM-assisted validation (`mp02/validator.py`)
+- **Receipt Builder** - Cryptographic effort receipts per Section 8 (`mp02/receipt.py`)
+- **Ledger System** - Append-only, time-ordered, chain-verified (`mp02/ledger.py`)
+- **Anchoring Service** - Checkpoints and inclusion proofs (`mp02/ledger.py`)
+- **Failure Recording** - Track observation gaps and conflicts (`mp02/ledger.py`)
+
 **CLI Commands (All Implemented):**
 - `ilog init <project>` - Creates `.intentlog/` with config
 - `ilog commit <message>` - Adds intent with hash
@@ -808,6 +824,11 @@ This section provides a consolidated reference to all project documentation and 
 - `ilog config llm` - Configure LLM provider
 - `ilog status` - Shows project info with LLM status
 - `ilog audit <file>` - Audit intent logs
+- `ilog observe <start|stop|status>` - Manage observation sessions (MP-02)
+- `ilog segment <mark|list>` - Mark segment boundaries (MP-02)
+- `ilog receipt <create|list|show|verify>` - Effort receipts (MP-02)
+- `ilog ledger <show|verify|export|stats|checkpoint>` - Ledger management (MP-02)
+- `ilog verify <all|ledger|receipts|receipt_id>` - Integrity verification (MP-02)
 
 **Test Coverage:**
 - `test_storage.py`: 27 tests for storage module
@@ -816,7 +837,8 @@ This section provides a consolidated reference to all project documentation and 
 - `test_audit.py`: 4 tests for audit functionality
 - `test_integrations.py`: 9 tests for Memory Vault
 - `test_llm.py`: 29 tests for LLM module
-- **Total: 105 tests passing**
+- `test_mp02.py`: 53 tests for MP-02 protocol components
+- **Total: 158 tests passing**
 
 ### Known Issues
 
