@@ -716,4 +716,81 @@ Implement Intent Sufficiency Test per Doctrine-of-intent.md.
 
 ---
 
+## Documentation Index
+
+This section provides a consolidated reference to all project documentation and their purposes.
+
+### Core Documentation
+
+| Document | Purpose | Audience |
+|----------|---------|----------|
+| [README.md](README.md) | Project overview, quick start, use cases | Users, contributors |
+| [mp-02-spec.md](mp-02-spec.md) | Proof-of-Effort Receipt Protocol specification + implementation tracking | Developers, architects |
+| [Doctrine-of-intent.md](Doctrine-of-intent.md) | Philosophical framework: provenance-first value attribution | Strategists, researchers |
+| [Prior-Art.md](Prior-Art.md) | Design patent timestamp (Dec 16, 2025), core design primitives | Legal, historians |
+
+### Operational Guides
+
+| Document | Purpose | Audience |
+|----------|---------|----------|
+| [INTEGRATION.md](INTEGRATION.md) | Integration overview for Git, CI/CD, LLMs | DevOps, integrators |
+| [Memory-Vault-Integration.md](Memory-Vault-Integration.md) | Detailed Memory Vault secure storage integration | Security engineers |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Development setup, code style, PR workflow | Contributors |
+| [Advanced-Use-Cases.md](Advanced-Use-Cases.md) | Production patterns: multi-agent, eval sets, HITL | Advanced users |
+
+### Supporting Content
+
+| Document | Purpose | Audience |
+|----------|---------|----------|
+| [Your-Work-Isnt-Worthless.md](Your-Work-Isnt-Worthless.md) | Practical essay on provenance value for creators | Creators, artists |
+| [LICENSE.md](LICENSE.md) | CC BY-SA 4.0 full legal text | Legal |
+
+### Cross-Reference: Features to Documentation
+
+| Feature Area | Primary Doc | Supporting Docs |
+|--------------|-------------|-----------------|
+| Core vision & primitives | README.md | Prior-Art.md, Doctrine-of-intent.md |
+| CLI commands | README.md (examples) | INTEGRATION.md (reference) |
+| MP-02 Protocol | mp-02-spec.md (sections 1-15) | Doctrine-of-intent.md (theory) |
+| Memory Vault | Memory-Vault-Integration.md | INTEGRATION.md (overview) |
+| `@intent_logger` decorator | Advanced-Use-Cases.md | CONTRIBUTING.md (code style) |
+| Cryptographic integrity | mp-02-spec.md (Plan 2) | Prior-Art.md (Merkle trees) |
+| LLM features | mp-02-spec.md (Plan 3) | INTEGRATION.md (LLM section) |
+| Doctrine metrics | mp-02-spec.md (Plan 8) | Doctrine-of-intent.md (sections 7-8) |
+
+---
+
+## Verification Notes
+
+### Verified Implementation Status (December 2025)
+
+The following was verified by code inspection:
+
+**Fully Implemented:**
+- `Intent` dataclass with UUID, timestamp, parent linking (`core.py:14-43`)
+- `IntentLog` manager with add, get, search, export, chain (`core.py:45-109`)
+- Audit engine: empty reasoning + loop detection (`audit.py:23-56`)
+- Memory Vault integration: classification, store, recall (`integrations/memory_vault.py`)
+- CLI `audit` command: full functionality (`cli.py:53-63`)
+- Entry points: Both `intentlog` and `ilog` aliases available (`setup.py:39-44`)
+
+**Confirmed Stubs (print-only, no persistence):**
+- `ilog init` - prints message only (`cli.py:14-19`)
+- `ilog commit` - prints message only (`cli.py:22-27`)
+- `ilog branch` - prints message only (`cli.py:30-35`)
+- `ilog log` - placeholder output (`cli.py:38-42`)
+- `ilog search` - placeholder output (`cli.py:45-50`)
+- `--attach` flag - defined but not functional (`cli.py:88`)
+
+### Known Issues
+
+| Issue | Location | Severity | Status |
+|-------|----------|----------|--------|
+| ~~License mismatch~~ | `setup.py` | ~~Medium~~ | **Fixed** - License now correctly set to CC-BY-SA-4.0 |
+| ~~pytest in install_requires~~ | `setup.py` | ~~Low~~ | **Fixed** - Moved to dev dependencies |
+
+*No outstanding issues as of December 2025 verification.*
+
+---
+
 *End of MP-02 Specification and Implementation Roadmap*
