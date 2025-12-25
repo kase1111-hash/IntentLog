@@ -880,6 +880,7 @@ The following features are documented across project documentation but have no i
 - `ilog receipt <create|list|show|verify>` - Effort receipts (MP-02)
 - `ilog ledger <show|verify|export|stats|checkpoint>` - Ledger management (MP-02)
 - `ilog verify <all|ledger|receipts|receipt_id>` - Integrity verification (MP-02)
+- `ilog privacy <status|revoke|list|encrypt|keys>` - Privacy controls (MP-02 Section 12)
 - `ilog export` - Export intents to JSON/JSONL/CSV/HuggingFace/OpenAI formats
 - `ilog analytics` - Generate analytics reports (summary, latency, frequency, etc.)
 - `ilog metrics` - Compute doctrine metrics (density, auditability, fraud resistance)
