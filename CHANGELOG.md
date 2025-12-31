@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - Python 3.12 support in classifiers
 - Optional dependency groups in pyproject.toml (`crypto`, `openai`, `anthropic`, `all`, `docs`, `benchmark`)
+- pytest-asyncio in dev dependencies for async test support
 - Coverage reporting in GitHub Actions CI
 - Multi-version Python testing matrix (3.9, 3.10, 3.11, 3.12)
 - This CHANGELOG file
