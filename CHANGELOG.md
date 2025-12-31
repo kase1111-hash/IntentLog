@@ -16,6 +16,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 - Updated GitHub Actions from setup-python@v4 to setup-python@v5
+- Updated Anthropic provider default model to claude-sonnet-4-20250514
+- Refactored CLI from monolithic cli.py (2,185 LOC) into modular cli/ package:
+  - `cli/core.py` - Core commands (init, commit, branch, log, search, etc.)
+  - `cli/mp02.py` - MP-02 Protocol commands (observe, segment, receipt, ledger, verify)
+  - `cli/analytics.py` - Analytics commands (export, analytics, metrics, sufficiency)
+  - `cli/crypto.py` - Cryptographic commands (keys, chain)
+  - `cli/privacy.py` - Privacy commands (privacy)
+  - `cli/formalize.py` - Formalization commands (formalize)
+  - `cli/utils.py` - Shared utilities
 
 ## [0.1.0] - 2025-01-01
 
