@@ -1,0 +1,86 @@
+site_name: IntentLog Documentation
+site_description: Version Control for Human Reasoning
+site_url: https://intentlog.dev
+repo_url: https://github.com/kase1111-hash/IntentLog
+repo_name: IntentLog
+
+theme:
+  name: material
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Switch to dark mode
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Switch to light mode
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.expand
+    - navigation.top
+    - search.suggest
+    - search.highlight
+    - content.code.copy
+    - content.code.annotate
+
+plugins:
+  - search
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          paths: [src]
+          options:
+            docstring_style: google
+            show_source: true
+            show_root_heading: true
+            show_root_full_path: false
+            show_symbol_type_heading: true
+            show_symbol_type_toc: true
+            members_order: source
+            merge_init_into_class: true
+            show_if_no_docstring: false
+
+markdown_extensions:
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.superfences
+  - pymdownx.tabbed:
+      alternate_style: true
+  - admonition
+  - pymdownx.details
+  - toc:
+      permalink: true
+
+nav:
+  - Home: index.md
+  - Getting Started:
+      - Installation: getting-started/installation.md
+      - Quick Start: getting-started/quickstart.md
+  - User Guide:
+      - Core Concepts: guide/concepts.md
+      - CLI Reference: guide/cli.md
+      - MP-02 Protocol: guide/mp02.md
+  - API Reference:
+      - Overview: api/index.md
+      - Core: api/core.md
+      - Storage: api/storage.md
+      - CLI: api/cli.md
+      - Crypto: api/crypto.md
+      - Privacy: api/privacy.md
+      - Analytics: api/analytics.md
+      - Semantic: api/semantic.md
+      - MP-02 Protocol: api/mp02.md
+  - Contributing: CONTRIBUTING.md
+  - Changelog: CHANGELOG.md
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/kase1111-hash/IntentLog
