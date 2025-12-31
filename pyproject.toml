@@ -49,6 +49,10 @@ docs = [
     "mkdocs-material>=9.0.0",
     "mkdocstrings[python]>=0.24.0",
 ]
+benchmark = [
+    "pytest>=7.4.0",
+    "pytest-benchmark>=4.0.0",
+]
 
 [project.scripts]
 intentlog = "intentlog.cli:main"
