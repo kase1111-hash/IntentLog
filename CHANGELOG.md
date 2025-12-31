@@ -9,7 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Python 3.12 support in classifiers
-- Optional dependency groups in pyproject.toml (`crypto`, `openai`, `anthropic`, `all`, `docs`)
+- Optional dependency groups in pyproject.toml (`crypto`, `openai`, `anthropic`, `all`, `docs`, `benchmark`)
+- pytest-asyncio in dev dependencies for async test support
 - Coverage reporting in GitHub Actions CI
 - Multi-version Python testing matrix (3.9, 3.10, 3.11, 3.12)
 - This CHANGELOG file
@@ -18,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Getting started guides (installation, quickstart)
   - User guides (concepts, CLI reference, MP-02 protocol)
   - Material theme with dark mode support
+- Performance benchmarks:
+  - Core module benchmarks (Intent creation, serialization)
+  - Storage benchmarks (add/load/search intents)
+  - Merkle tree benchmarks (hash computation, tree building)
+  - Analytics benchmarks (latency/frequency stats, metrics)
+  - Export benchmarks (JSON, JSONL, CSV formats)
+  - Compatible with pytest-benchmark for CI integration
 
 ### Changed
 - Updated GitHub Actions from setup-python@v4 to setup-python@v5
