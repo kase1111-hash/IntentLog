@@ -25,12 +25,20 @@ class AnthropicProvider(LLMProvider):
     """
     Anthropic Claude API provider.
 
-    Supports Claude 3.5, Claude 3, and other Claude models.
+    Supports Claude model families including Claude 4, Claude 3.5, and Claude 3.
+    Configure specific models via the model parameter in LLMConfig.
     Uses urllib for HTTP requests to avoid external dependencies.
+
+    Available models (as of 2025):
+    - claude-sonnet-4-20250514 (latest Sonnet)
+    - claude-opus-4-5-20251101 (latest Opus)
+    - claude-3-5-sonnet-20241022
+    - claude-3-5-haiku-20241022
+    - claude-3-opus-20240229
     """
 
     DEFAULT_BASE_URL = "https://api.anthropic.com/v1"
-    DEFAULT_MODEL = "claude-3-5-sonnet-20241022"
+    DEFAULT_MODEL = "claude-sonnet-4-20250514"
     API_VERSION = "2023-06-01"
 
     @property
