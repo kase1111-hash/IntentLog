@@ -44,6 +44,11 @@ all = [
     "openai>=1.0.0",
     "anthropic>=0.18.0",
 ]
+docs = [
+    "mkdocs>=1.5.0",
+    "mkdocs-material>=9.0.0",
+    "mkdocstrings[python]>=0.24.0",
+]
 
 [project.scripts]
 intentlog = "intentlog.cli:main"

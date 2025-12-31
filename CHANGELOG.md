@@ -9,10 +9,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Python 3.12 support in classifiers
-- Optional dependency groups in pyproject.toml (`crypto`, `openai`, `anthropic`, `all`)
+- Optional dependency groups in pyproject.toml (`crypto`, `openai`, `anthropic`, `all`, `docs`)
 - Coverage reporting in GitHub Actions CI
 - Multi-version Python testing matrix (3.9, 3.10, 3.11, 3.12)
 - This CHANGELOG file
+- MkDocs-based API documentation with mkdocstrings:
+  - API reference for all modules (core, storage, cli, crypto, privacy, analytics, semantic, mp02)
+  - Getting started guides (installation, quickstart)
+  - User guides (concepts, CLI reference, MP-02 protocol)
+  - Material theme with dark mode support
 
 ### Changed
 - Updated GitHub Actions from setup-python@v4 to setup-python@v5
