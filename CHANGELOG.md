@@ -39,6 +39,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - `cli/formalize.py` - Formalization commands (formalize)
   - `cli/utils.py` - Shared utilities
 
+### Documentation
+- Comprehensive README.md update with all phases (1-9) and features
+- Updated CONTRIBUTING.md with current project structure and development workflow
+- Updated INTEGRATION.md with full CLI reference, LLM integration, context/decorator, triggers, and privacy controls
+- Enhanced docs/index.md with complete feature overview
+- Updated docs/api/index.md with all modules, usage examples, and exported symbols
+- Added context, decorator, and triggers documentation to API reference
+
 ## [0.1.0] - 2025-01-01
 
 ### Added
