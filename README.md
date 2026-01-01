@@ -2,6 +2,7 @@
 
 **What if Git tracked *why*, not just *what*?**
 
+[![CI](https://github.com/kase1111-hash/IntentLog/actions/workflows/intent_audit.yml/badge.svg)](https://github.com/kase1111-hash/IntentLog/actions/workflows/intent_audit.yml)
 [![License: CC BY-SA 4.0](https://img.shields.io/badge/License-CC%20BY--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-sa/4.0/)
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![Version](https://img.shields.io/badge/version-0.1.0-green.svg)](https://github.com/kase1111-hash/IntentLog)
