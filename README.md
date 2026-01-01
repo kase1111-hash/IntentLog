@@ -7,7 +7,7 @@
 [![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
 [![Version](https://img.shields.io/badge/version-0.1.0-green.svg)](https://github.com/kase1111-hash/IntentLog)
 
-> **Note**: This is a conceptual design released for collaborative development. Reference implementation coming Q1 2026. Feedback and prototype contributions welcome.
+> **Note**: This is an alpha release (v0.1.0) of the reference implementation. Feedback and contributions welcome.
 
 ## Overview
 
@@ -277,4 +277,4 @@ You are free to share and adapt, provided you give appropriate credit and share 
 
 ---
 
-**Open for collaboration. Prototype early 2026. Prior art timestamped December 16, 2025.**
+**Open for collaboration. Prior art timestamped December 16, 2025.**
