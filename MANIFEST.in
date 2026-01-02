@@ -1,13 +1,34 @@
+# Include documentation
 include README.md
 include LICENSE.md
-include requirements.txt
+include CHANGELOG.md
+include PRODUCTION_READINESS.md
+include SECURITY_AUDIT.md
 include pyproject.toml
-recursive-include src/intentlog *.py
-recursive-include tests *.py
-recursive-include docs *.md
+
+# Include doctrine and philosophy docs
 include Doctrine-of-intent.md
 include AI.md
 include Advanced-Use-Cases.md
 include Memory-Vault-Integration.md
 include Prior-Art.md
 include Your-Work-Isnt-Worthless.md
+
+# Include package data
+include src/intentlog/py.typed
+recursive-include src/intentlog *.py
+
+# Include documentation
+recursive-include docs *.md
+
+# Exclude development files
+exclude .gitignore
+exclude .pre-commit-config.yaml
+prune .github
+
+# Exclude build artifacts
+global-exclude *.pyc
+global-exclude *.pyo
+global-exclude __pycache__
+global-exclude *.egg-info
+global-exclude .DS_Store

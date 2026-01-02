@@ -12,24 +12,46 @@ license = {text = "CC BY-SA 4.0"}
 authors = [
     {name = "IntentLog Contributors"}
 ]
+keywords = [
+    "version-control",
+    "reasoning",
+    "intent",
+    "merkle-tree",
+    "cryptographic-signatures",
+    "audit-trail",
+    "decision-tracking",
+]
 classifiers = [
     "Development Status :: 3 - Alpha",
     "Intended Audience :: Developers",
+    "Intended Audience :: Science/Research",
     "Topic :: Software Development :: Version Control",
+    "Topic :: Scientific/Engineering :: Artificial Intelligence",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Operating System :: OS Independent",
+    "Typing :: Typed",
 ]
 dependencies = []
+
+[project.urls]
+Homepage = "https://github.com/kase1111-hash/IntentLog"
+Documentation = "https://github.com/kase1111-hash/IntentLog#readme"
+Repository = "https://github.com/kase1111-hash/IntentLog.git"
+Issues = "https://github.com/kase1111-hash/IntentLog/issues"
+Changelog = "https://github.com/kase1111-hash/IntentLog/blob/main/CHANGELOG.md"
 
 [project.optional-dependencies]
 dev = [
     "pytest>=7.4.0",
     "pytest-asyncio>=0.21.0",
     "pytest-cov>=4.1.0",
+    "mypy>=1.0.0",
+    "ruff>=0.1.0",
 ]
 crypto = [
     "cryptography>=41.0.0",
@@ -38,6 +60,10 @@ openai = [
     "openai>=1.0.0",
 ]
 anthropic = [
+    "anthropic>=0.18.0",
+]
+llm = [
+    "openai>=1.0.0",
     "anthropic>=0.18.0",
 ]
 all = [
@@ -59,6 +85,12 @@ benchmark = [
 intentlog = "intentlog.cli:main"
 ilog = "intentlog.cli:main"
 
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+intentlog = ["py.typed"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 python_files = ["test_*.py"]
@@ -79,3 +111,18 @@ exclude_lines = [
     "raise NotImplementedError",
     "if __name__ == .__main__.:",
 ]
+
+[tool.mypy]
+python_version = "3.8"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = false
+ignore_missing_imports = true
+
+[tool.ruff]
+target-version = "py38"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "UP"]
+ignore = ["E501"]
