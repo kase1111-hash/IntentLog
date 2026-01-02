@@ -48,7 +48,7 @@ The CLI is well-structured with:
 |-------|--------|----------------|--------|
 | ~~No test suite execution in CI~~ | ~~Unknown test coverage~~ | ~~Add GitHub Actions test workflow~~ | Done |
 | ~~Missing Windows support~~ | ~~Limited to Unix/Linux~~ | ~~Replace `fcntl` with cross-platform locking~~ | Done |
-| **No rate limiting for LLM calls** | Potential API abuse | Add rate limiting and retry logic | Open |
+| ~~No rate limiting for LLM calls~~ | ~~Potential API abuse~~ | ~~Add rate limiting and retry logic~~ | Done |
 
 ### High Priority
 
@@ -194,7 +194,7 @@ Optional: cryptography, openai, anthropic packages
 
 1. [x] Add GitHub Actions test workflow (`.github/workflows/tests.yml`)
 2. [x] Implement cross-platform file locking (`src/intentlog/filelock.py`)
-3. [ ] Add LLM rate limiting and retry logic
+3. [x] Add LLM rate limiting and retry logic (`src/intentlog/ratelimit.py`)
 4. [x] Fix import error handling (`src/intentlog/__init__.py`)
 
 ### Phase 2: Stability (Weeks 3-4)
