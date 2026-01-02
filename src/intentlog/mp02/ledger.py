@@ -20,13 +20,13 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Dict, Any, Iterator
-import fcntl
 import hashlib
 import json
 import os
 import uuid
 
 from .receipt import Receipt
+from ..filelock import file_lock
 
 
 class LedgerError(Exception):
@@ -204,12 +204,9 @@ class Ledger:
         ledger_path = self._get_ledger_path()
         self._check_rotation()
 
-        with open(ledger_path, "a") as f:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-            try:
+        with file_lock(ledger_path, exclusive=True):
+            with open(ledger_path, "a") as f:
                 f.write(entry.to_line() + "\n")
-            finally:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
         self._last_hash = entry.compute_hash()
         return entry
@@ -417,12 +414,9 @@ class Ledger:
 
         # Write to ledger
         ledger_path = self._get_ledger_path()
-        with open(ledger_path, "a") as f:
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
-            try:
+        with file_lock(ledger_path, exclusive=True):
+            with open(ledger_path, "a") as f:
                 f.write(entry.to_line() + "\n")
-            finally:
-                fcntl.flock(f.fileno(), fcntl.LOCK_UN)
 
         self._last_hash = entry.compute_hash()
         return entry

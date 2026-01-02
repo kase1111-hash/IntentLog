@@ -14,7 +14,6 @@ Supports:
 import json
 import os
 import hashlib
-import fcntl
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Tuple, TYPE_CHECKING
@@ -208,27 +207,11 @@ class IntentLogStorage:
         """
         Context manager for file locking.
 
-        Uses fcntl for Unix file locking to prevent concurrent writes.
+        Uses cross-platform file locking to prevent concurrent writes.
+        Works on Unix (fcntl), Windows (msvcrt), and falls back to lock files.
         """
-        class FileLock:
-            def __init__(self, path: Path, exclusive: bool):
-                self.path = path
-                self.exclusive = exclusive
-                self.file = None
-
-            def __enter__(self):
-                self.file = open(self.path, 'a+')
-                lock_type = fcntl.LOCK_EX if self.exclusive else fcntl.LOCK_SH
-                fcntl.flock(self.file.fileno(), lock_type)
-                return self.file
-
-            def __exit__(self, exc_type, exc_val, exc_tb):
-                if self.file:
-                    fcntl.flock(self.file.fileno(), fcntl.LOCK_UN)
-                    self.file.close()
-                return False
-
-        return FileLock(file_path, exclusive)
+        from .filelock import FileLock
+        return FileLock(file_path, exclusive=exclusive)
 
     def is_initialized(self) -> bool:
         """Check if project is initialized"""
