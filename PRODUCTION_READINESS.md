@@ -30,6 +30,13 @@ IntentLog is a well-architected, comprehensive implementation of a version contr
 - **semantic.py** (~1150 LOC): Well-designed LLM integration with caching
 - **merkle.py**: Proper Merkle tree implementation for tamper-evidence
 
+### Integrations Review
+
+- **boundary_daemon.py** (~400 LOC): Policy enforcement and audit logging with Boundary-Daemon
+- **boundary_siem.py** (~500 LOC): CEF/LEEF/JSON event emission to Boundary-SIEM
+- **memory_vault.py**: Secure classified storage integration
+- **llm_classifier.py**: LLM-based intent classification
+
 ### CLI Review
 
 The CLI is well-structured with:
