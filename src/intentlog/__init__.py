@@ -11,6 +11,16 @@ __license__ = "CC BY-SA 4.0"
 
 from .core import IntentLog, Intent
 from .audit import audit_logs
+from .logging import (
+    configure_logging,
+    get_logger,
+    log_context,
+    log_function_call,
+    LogFormat,
+    LogLevel as StructuredLogLevel,
+    LogContext,
+    IntentLogLogger,
+)
 from .storage import (
     IntentLogStorage,
     ProjectConfig,
@@ -46,6 +56,8 @@ from .merkle import (
 )
 
 # Crypto imports are optional (requires cryptography library)
+# Note: cryptography can fail with various exceptions including ImportError,
+# RuntimeError (Rust binding failures), or other system-level errors
 try:
     from .crypto import (
         KeyManager,
@@ -59,8 +71,8 @@ try:
         SignatureError,
         CRYPTO_AVAILABLE,
     )
-except ImportError:
-    # Crypto not available
+except Exception:
+    # Crypto not available (ImportError, RuntimeError, or cryptography binding failures)
     CRYPTO_AVAILABLE = False
     KeyManager = None
     KeyPair = None
@@ -182,6 +194,16 @@ __all__ = [
     "IntentLog",
     "Intent",
     "audit_logs",
+    # Logging
+    "configure_logging",
+    "get_logger",
+    "log_context",
+    "log_function_call",
+    "LogFormat",
+    "StructuredLogLevel",
+    "LogContext",
+    "IntentLogLogger",
+    # Storage
     "IntentLogStorage",
     "ProjectConfig",
     "LLMSettings",
