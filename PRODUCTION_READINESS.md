@@ -68,12 +68,12 @@ The CLI is well-structured with:
 
 ### Medium Priority
 
-| Issue | Impact | Recommendation |
-|-------|--------|----------------|
-| **No CLI autocompletion** | UX limitation | Add shell completion scripts |
-| **Missing progress indicators** | Poor UX for long ops | Add progress bars for LLM operations |
-| **No config file validation** | Silent failures | Add JSON schema validation for config |
-| **Limited error context** | Debugging difficulty | Add error codes and detailed messages |
+| Issue | Impact | Recommendation | Status |
+|-------|--------|----------------|--------|
+| ~~No CLI autocompletion~~ | ~~UX limitation~~ | ~~Add shell completion scripts~~ | Done |
+| **Missing progress indicators** | Poor UX for long ops | Add progress bars for LLM operations | Open |
+| ~~No config file validation~~ | ~~Silent failures~~ | ~~Add JSON schema validation for config~~ | Done |
+| **Limited error context** | Debugging difficulty | Add error codes and detailed messages | Open |
 
 ### Low Priority (Nice to Have)
 

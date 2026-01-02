@@ -7,31 +7,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.1.0-alpha] - 2026-01-02
+
+First alpha release with comprehensive production readiness improvements.
+
 ### Added
+
+#### Production Infrastructure
 - Backup and recovery module (`src/intentlog/backup.py`):
-  - Full project backups with compression
-  - Backup metadata and checksums
+  - Full project backups with gzip compression
+  - Backup metadata with SHA-256 checksums
   - Restore operations with verification
-  - Backup cleanup and retention policies
+  - Retention policies for cleanup
 - Load testing suite (`tests/test_load.py`):
-  - Concurrent write/read tests
-  - File locking stress tests
+  - Concurrent write/read stress tests
+  - File locking correctness verification
   - Chain integrity under load
-  - Performance benchmarks
+  - Performance benchmarks with latency percentiles
+
+#### External Integrations
 - Boundary-Daemon integration (`src/intentlog/integrations/boundary_daemon.py`):
   - Policy enforcement for intent operations
   - Audit event emission
-  - Boundary mode awareness
+  - Boundary mode awareness (OPEN → LOCKDOWN)
   - Unix socket and HTTP endpoint support
 - Boundary-SIEM integration (`src/intentlog/integrations/boundary_siem.py`):
   - CEF (Common Event Format) output
   - LEEF (IBM QRadar) format support
   - Async batched event delivery
   - Compliance tagging (SOC 2, ISO 27001, NIST CSF)
+
+#### Security & Validation
 - Security audit report (`SECURITY_AUDIT.md`)
 - Input validation module (`src/intentlog/validation.py`):
   - Path traversal prevention
   - Project/branch name validation
+- JSON schema validation (`src/intentlog/schema.py`):
+  - Config file validation
+  - Intents file validation
+  - Project health checks
+
+#### Developer Experience
+- CLI shell completion (`src/intentlog/cli/completion.py`):
+  - Bash completion
+  - Zsh completion
+  - Fish completion
 - Structured logging module (`src/intentlog/logging.py`):
   - JSON and console output formats
   - Context propagation
@@ -40,18 +60,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Token bucket rate limiting
   - Exponential backoff retry
   - Circuit breaker pattern
+
+#### Platform Support
 - Cross-platform file locking (`src/intentlog/filelock.py`):
   - Unix (fcntl), Windows (msvcrt), fallback support
 - GitHub Actions test workflow (`.github/workflows/tests.yml`)
-- PyPI publication preparation:
-  - Updated pyproject.toml with URLs and keywords
-  - py.typed marker for type hints
-  - MANIFEST.in updates
-- Python 3.12 support in classifiers
-- Optional dependency groups in pyproject.toml (`crypto`, `openai`, `anthropic`, `all`, `docs`, `benchmark`)
-- pytest-asyncio in dev dependencies for async test support
-- Coverage reporting in GitHub Actions CI
-- Multi-version Python testing matrix (3.9, 3.10, 3.11, 3.12)
+- Python 3.12 support
+
+#### PyPI Publication
+- Updated pyproject.toml with URLs and keywords
+- py.typed marker for PEP 561 type hints
+- MANIFEST.in updates
+- Optional dependency groups (`crypto`, `openai`, `anthropic`, `llm`, `all`, `docs`, `benchmark`)
+- pytest-asyncio in dev dependencies
+- mypy and ruff configurations
+
+### Documentation
 - This CHANGELOG file
 - MkDocs-based API documentation with mkdocstrings:
   - API reference for all modules (core, storage, cli, crypto, privacy, analytics, semantic, mp02)

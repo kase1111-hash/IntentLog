@@ -22,6 +22,7 @@ from .analytics import register_analytics_commands
 from .crypto import register_crypto_commands
 from .privacy import register_privacy_commands
 from .formalize import register_formalize_commands
+from .completion import register_completion_commands
 
 
 def create_parser():
@@ -45,6 +46,7 @@ def create_parser():
     register_crypto_commands(subparsers)
     register_privacy_commands(subparsers)
     register_formalize_commands(subparsers)
+    register_completion_commands(subparsers)
 
     return parser
 
@@ -71,4 +73,5 @@ __all__ = [
     'register_crypto_commands',
     'register_privacy_commands',
     'register_formalize_commands',
+    'register_completion_commands',
 ]
