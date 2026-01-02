@@ -2,6 +2,7 @@
 Anthropic Provider for IntentLog
 
 Provides integration with Anthropic's Claude API for completions.
+Includes rate limiting and retry logic for production reliability.
 """
 
 import json
@@ -19,6 +20,8 @@ from .provider import (
     AuthenticationError,
     ModelNotFoundError,
 )
+from ..ratelimit import get_llm_rate_limiter
+from ..logging import get_logger
 
 
 class AnthropicProvider(LLMProvider):
@@ -65,9 +68,10 @@ class AnthropicProvider(LLMProvider):
             "Content-Type": "application/json",
         }
 
-    def _make_request(self, endpoint: str, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Make HTTP request to Anthropic API"""
+    def _make_request_internal(self, endpoint: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Make HTTP request to Anthropic API (internal, without rate limiting)"""
         url = f"{self._get_base_url()}/{endpoint}"
+        logger = get_logger()
 
         try:
             request = Request(
@@ -94,6 +98,11 @@ class AnthropicProvider(LLMProvider):
                 raise AuthenticationError(f"Authentication failed: {error_msg}")
             elif e.code == 429:
                 retry_after = e.headers.get("Retry-After")
+                logger.warning(
+                    "Anthropic rate limit hit",
+                    endpoint=endpoint,
+                    retry_after=retry_after
+                )
                 raise RateLimitError(
                     f"Rate limit exceeded: {error_msg}",
                     retry_after=float(retry_after) if retry_after else None,
@@ -105,6 +114,15 @@ class AnthropicProvider(LLMProvider):
 
         except URLError as e:
             raise LLMError(f"Network error: {e.reason}")
+
+    def _make_request(self, endpoint: str, data: Dict[str, Any]) -> Dict[str, Any]:
+        """Make HTTP request to Anthropic API with rate limiting and retry"""
+        rate_limiter = get_llm_rate_limiter()
+
+        return rate_limiter.execute(
+            lambda: self._make_request_internal(endpoint, data),
+            operation=f"anthropic_{endpoint}"
+        )
 
     def complete(self, prompt: str, system: Optional[str] = None) -> LLMResponse:
         """Generate completion using Anthropic messages API"""

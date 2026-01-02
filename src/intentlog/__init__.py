@@ -21,6 +21,21 @@ from .logging import (
     LogContext,
     IntentLogLogger,
 )
+from .ratelimit import (
+    RateLimiter,
+    RateLimitConfig,
+    RetryConfig,
+    RetryStrategy,
+    TokenBucket,
+    CircuitBreaker,
+    CircuitBreakerConfig,
+    RateLimitExceeded,
+    CircuitOpenError,
+    with_retry,
+    with_rate_limit,
+    get_llm_rate_limiter,
+    configure_llm_rate_limit,
+)
 from .storage import (
     IntentLogStorage,
     ProjectConfig,
@@ -203,6 +218,20 @@ __all__ = [
     "StructuredLogLevel",
     "LogContext",
     "IntentLogLogger",
+    # Rate Limiting
+    "RateLimiter",
+    "RateLimitConfig",
+    "RetryConfig",
+    "RetryStrategy",
+    "TokenBucket",
+    "CircuitBreaker",
+    "CircuitBreakerConfig",
+    "RateLimitExceeded",
+    "CircuitOpenError",
+    "with_retry",
+    "with_rate_limit",
+    "get_llm_rate_limiter",
+    "configure_llm_rate_limit",
     # Storage
     "IntentLogStorage",
     "ProjectConfig",

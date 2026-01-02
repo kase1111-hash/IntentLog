@@ -21,6 +21,7 @@ from dataclasses import dataclass, field
 
 from .core import Intent, IntentLog
 from .logging import get_logger, log_context
+from .validation import validate_project_name, validate_branch_name, ValidationError
 
 # Lazy imports to avoid circular dependencies
 if TYPE_CHECKING:
@@ -238,8 +239,12 @@ class IntentLogStorage:
 
         Raises:
             ProjectExistsError: If project exists and force=False
+            ValidationError: If project name is invalid
         """
         logger = get_logger()
+
+        # Validate project name to prevent path traversal
+        project_name = validate_project_name(project_name)
 
         if self.is_initialized() and not force:
             logger.debug("Project already initialized", path=str(self.project_root))
@@ -426,8 +431,13 @@ class IntentLogStorage:
 
         Raises:
             BranchExistsError: If branch already exists
+            ValidationError: If branch name is invalid
         """
         logger = get_logger()
+
+        # Validate branch name to prevent path traversal
+        branch_name = validate_branch_name(branch_name)
+
         config = self.load_config()
         from_branch = from_branch or config.current_branch
 
@@ -474,7 +484,11 @@ class IntentLogStorage:
 
         Raises:
             BranchNotFoundError: If branch doesn't exist
+            ValidationError: If branch name is invalid
         """
+        # Validate branch name to prevent path traversal
+        branch_name = validate_branch_name(branch_name)
+
         branch_file = self._get_branch_file(branch_name)
         if not branch_file.is_file() and branch_name != "main":
             raise BranchNotFoundError(f"Branch '{branch_name}' not found")
