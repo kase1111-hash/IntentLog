@@ -227,19 +227,6 @@ from .validation import (
     ValidationError,
 )
 
-# Schema Validation
-from .schema import (
-    SchemaValidator,
-    ValidationResult,
-    validate_config_file,
-    validate_intents_file,
-    validate_project,
-    check_project_health,
-    CONFIG_SCHEMA,
-    INTENT_SCHEMA,
-    INTENTS_FILE_SCHEMA,
-)
-
 __all__ = [
     "IntentLog",
     "Intent",
@@ -425,15 +412,5 @@ __all__ = [
     "validate_path_within_directory",
     "sanitize_filename",
     "ValidationError",
-    # Schema Validation
-    "SchemaValidator",
-    "ValidationResult",
-    "validate_config_file",
-    "validate_intents_file",
-    "validate_project",
-    "check_project_health",
-    "CONFIG_SCHEMA",
-    "INTENT_SCHEMA",
-    "INTENTS_FILE_SCHEMA",
     "__version__",
 ]
