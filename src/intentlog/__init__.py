@@ -205,6 +205,28 @@ from .privacy import (
     ENCRYPTION_AVAILABLE,
 )
 
+# Backup and Recovery
+from .backup import (
+    BackupManager,
+    BackupMetadata,
+    RestoreResult,
+    BackupError,
+    RestoreError,
+    create_backup,
+    restore_backup,
+    list_backups,
+)
+
+# Input Validation
+from .validation import (
+    validate_project_name,
+    validate_branch_name,
+    validate_intent_name,
+    validate_path_within_directory,
+    sanitize_filename,
+    ValidationError,
+)
+
 __all__ = [
     "IntentLog",
     "Intent",
@@ -374,5 +396,21 @@ __all__ = [
     "external_api_call",
     "file_operation",
     "payment_processing",
+    # Backup and Recovery
+    "BackupManager",
+    "BackupMetadata",
+    "RestoreResult",
+    "BackupError",
+    "RestoreError",
+    "create_backup",
+    "restore_backup",
+    "list_backups",
+    # Input Validation
+    "validate_project_name",
+    "validate_branch_name",
+    "validate_intent_name",
+    "validate_path_within_directory",
+    "sanitize_filename",
+    "ValidationError",
     "__version__",
 ]

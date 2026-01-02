@@ -8,6 +8,45 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Backup and recovery module (`src/intentlog/backup.py`):
+  - Full project backups with compression
+  - Backup metadata and checksums
+  - Restore operations with verification
+  - Backup cleanup and retention policies
+- Load testing suite (`tests/test_load.py`):
+  - Concurrent write/read tests
+  - File locking stress tests
+  - Chain integrity under load
+  - Performance benchmarks
+- Boundary-Daemon integration (`src/intentlog/integrations/boundary_daemon.py`):
+  - Policy enforcement for intent operations
+  - Audit event emission
+  - Boundary mode awareness
+  - Unix socket and HTTP endpoint support
+- Boundary-SIEM integration (`src/intentlog/integrations/boundary_siem.py`):
+  - CEF (Common Event Format) output
+  - LEEF (IBM QRadar) format support
+  - Async batched event delivery
+  - Compliance tagging (SOC 2, ISO 27001, NIST CSF)
+- Security audit report (`SECURITY_AUDIT.md`)
+- Input validation module (`src/intentlog/validation.py`):
+  - Path traversal prevention
+  - Project/branch name validation
+- Structured logging module (`src/intentlog/logging.py`):
+  - JSON and console output formats
+  - Context propagation
+  - Function decorators
+- LLM rate limiting module (`src/intentlog/ratelimit.py`):
+  - Token bucket rate limiting
+  - Exponential backoff retry
+  - Circuit breaker pattern
+- Cross-platform file locking (`src/intentlog/filelock.py`):
+  - Unix (fcntl), Windows (msvcrt), fallback support
+- GitHub Actions test workflow (`.github/workflows/tests.yml`)
+- PyPI publication preparation:
+  - Updated pyproject.toml with URLs and keywords
+  - py.typed marker for type hints
+  - MANIFEST.in updates
 - Python 3.12 support in classifiers
 - Optional dependency groups in pyproject.toml (`crypto`, `openai`, `anthropic`, `all`, `docs`, `benchmark`)
 - pytest-asyncio in dev dependencies for async test support
