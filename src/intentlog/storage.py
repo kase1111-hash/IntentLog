@@ -20,6 +20,7 @@ from typing import Optional, Dict, Any, List, Tuple, TYPE_CHECKING
 from dataclasses import dataclass, field
 
 from .core import Intent, IntentLog
+from .logging import get_logger, log_context
 
 # Lazy imports to avoid circular dependencies
 if TYPE_CHECKING:
@@ -238,14 +239,20 @@ class IntentLogStorage:
         Raises:
             ProjectExistsError: If project exists and force=False
         """
+        logger = get_logger()
+
         if self.is_initialized() and not force:
+            logger.debug("Project already initialized", path=str(self.project_root))
             raise ProjectExistsError(
                 f"IntentLog already initialized in {self.project_root}"
             )
 
+        logger.info("Initializing IntentLog project", project=project_name, path=str(self.project_root))
+
         # Create directory structure
         self.intentlog_dir.mkdir(exist_ok=True)
         self.branches_dir.mkdir(exist_ok=True)
+        logger.debug("Created directory structure")
 
         # Create config
         config = ProjectConfig(project_name=project_name)
@@ -265,6 +272,7 @@ class IntentLogStorage:
             f.write("*.secret\n")
             f.write("temp/\n")
 
+        logger.info("Project initialized successfully", project=project_name)
         return config
 
     def load_config(self) -> ProjectConfig:
@@ -387,6 +395,8 @@ class IntentLogStorage:
         Returns:
             The created Intent with computed hash
         """
+        logger = get_logger()
+
         intent = Intent(
             intent_name=name,
             intent_reasoning=reasoning,
@@ -395,11 +405,14 @@ class IntentLogStorage:
         )
 
         if not intent.validate():
+            logger.warning("Invalid intent: missing name or reasoning")
             raise ValueError("Intent must have name and non-empty reasoning")
 
-        intents = self.load_intents(branch)
-        intents.append(intent)
-        self.save_intents(intents, branch)
+        with log_context(intent_id=intent.intent_id, branch=branch, operation="add_intent"):
+            intents = self.load_intents(branch)
+            intents.append(intent)
+            self.save_intents(intents, branch)
+            logger.info("Added intent", name=name[:50], intent_id=intent.intent_id[:12])
 
         return intent
 
@@ -414,12 +427,16 @@ class IntentLogStorage:
         Raises:
             BranchExistsError: If branch already exists
         """
+        logger = get_logger()
         config = self.load_config()
         from_branch = from_branch or config.current_branch
 
         new_branch_file = self._get_branch_file(branch_name)
         if new_branch_file.is_file():
+            logger.debug("Branch already exists", branch=branch_name)
             raise BranchExistsError(f"Branch '{branch_name}' already exists")
+
+        logger.info("Creating branch", branch=branch_name, from_branch=from_branch)
 
         # Copy intents from source branch
         intents = self.load_intents(from_branch)
@@ -445,6 +462,8 @@ class IntentLogStorage:
 
         with open(new_branch_file, 'w') as f:
             json.dump(data, f, indent=2)
+
+        logger.info("Branch created", branch=branch_name, intents_copied=len(intents))
 
     def switch_branch(self, branch_name: str) -> None:
         """

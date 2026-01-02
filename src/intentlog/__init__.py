@@ -11,6 +11,16 @@ __license__ = "CC BY-SA 4.0"
 
 from .core import IntentLog, Intent
 from .audit import audit_logs
+from .logging import (
+    configure_logging,
+    get_logger,
+    log_context,
+    log_function_call,
+    LogFormat,
+    LogLevel as StructuredLogLevel,
+    LogContext,
+    IntentLogLogger,
+)
 from .storage import (
     IntentLogStorage,
     ProjectConfig,
@@ -184,6 +194,16 @@ __all__ = [
     "IntentLog",
     "Intent",
     "audit_logs",
+    # Logging
+    "configure_logging",
+    "get_logger",
+    "log_context",
+    "log_function_call",
+    "LogFormat",
+    "StructuredLogLevel",
+    "LogContext",
+    "IntentLogLogger",
+    # Storage
     "IntentLogStorage",
     "ProjectConfig",
     "LLMSettings",

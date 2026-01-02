@@ -52,12 +52,12 @@ The CLI is well-structured with:
 
 ### High Priority
 
-| Issue | Impact | Recommendation |
-|-------|--------|----------------|
-| **No logging framework** | Difficult debugging | Add structured logging (e.g., `logging` module) |
-| **Missing input validation** | Security vulnerability | Add input sanitization for file paths |
-| **No backup/recovery mechanism** | Data loss risk | Add backup commands and recovery procedures |
-| **Missing concurrent access tests** | Potential race conditions | Add stress tests for file locking |
+| Issue | Impact | Recommendation | Status |
+|-------|--------|----------------|--------|
+| ~~No logging framework~~ | ~~Difficult debugging~~ | ~~Add structured logging~~ | Done |
+| **Missing input validation** | Security vulnerability | Add input sanitization for file paths | Open |
+| **No backup/recovery mechanism** | Data loss risk | Add backup commands and recovery procedures | Open |
+| **Missing concurrent access tests** | Potential race conditions | Add stress tests for file locking | Open |
 
 ### Medium Priority
 
@@ -199,7 +199,7 @@ Optional: cryptography, openai, anthropic packages
 
 ### Phase 2: Stability (Weeks 3-4)
 
-1. [ ] Add structured logging
+1. [x] Add structured logging (`src/intentlog/logging.py`)
 2. [ ] Implement input validation
 3. [ ] Add backup/recovery commands
 4. [ ] Write load tests
