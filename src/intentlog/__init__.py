@@ -46,6 +46,8 @@ from .merkle import (
 )
 
 # Crypto imports are optional (requires cryptography library)
+# Note: cryptography can fail with various exceptions including ImportError,
+# RuntimeError (Rust binding failures), or other system-level errors
 try:
     from .crypto import (
         KeyManager,
@@ -59,8 +61,8 @@ try:
         SignatureError,
         CRYPTO_AVAILABLE,
     )
-except ImportError:
-    # Crypto not available
+except Exception:
+    # Crypto not available (ImportError, RuntimeError, or cryptography binding failures)
     CRYPTO_AVAILABLE = False
     KeyManager = None
     KeyPair = None

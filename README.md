@@ -251,6 +251,7 @@ Every commit is a breadcrumb of cognition. Every branch is an explored possibili
 - [API Reference](docs/api/index.md)
 - [Doctrine of Intent](Doctrine-of-intent.md)
 - [MP-02 Specification](mp-02-spec.md)
+- [Production Readiness Assessment](PRODUCTION_READINESS.md)
 
 ## Contributing
 
