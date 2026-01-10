@@ -11,28 +11,34 @@
 
 ## Overview
 
+IntentLog is a **semantic version control** system and **intent tracking system** designed to preserve human reasoning alongside code changes. It's **git for decisions**—a **cognitive version control** tool that captures the "why" behind every change through **prose-first commits**.
+
 Most version control systems excel at capturing syntactic changes—what lines were added, deleted, or modified—but they remain blind to the human reasoning behind those changes. Decisions scatter across chat threads, emails, meeting notes, and forgotten comments, leaving future contributors to reverse-engineer intent from cryptic diffs and commit messages.
 
-IntentLog introduces **semantic versioning for reasoning itself**: prose commits that preserve narrative context, LLM-powered explanations of changes, and traceable evolution of ideas. By making natural language the first-class artifact, it turns decision-making into an auditable, branchable, and interpretable history.
+IntentLog introduces **version control for reasoning itself**: prose commits that preserve narrative context, **LLM-powered semantic diffs** instead of line-by-line changes, and traceable evolution of ideas. By making natural language the first-class artifact, it turns decision-making into an auditable, branchable, and interpretable history—a complete **reasoning audit trail** for your project.
 
 ## The Problem
 
+How do you **track why decisions were made**? How do you **document design decisions** in a way that evolves with your codebase?
+
 - **Decision context gets lost**: A refactor happens, but the rationale vanishes into ephemeral Slack threads
 - **"Why did we do this?" lives in old chats**: Onboarding becomes archaeological work; debugging feels like guesswork
-- **ADRs aren't connected to evolution**: Architecture Decision Records are static documents, disconnected from actual commits
+- **ADRs aren't connected to evolution**: Architecture Decision Records are static documents, disconnected from actual commits—you need a better **ADR alternative**
+
+IntentLog is a **reasoning documentation tool** and **design decision tracking** system that solves these problems by making intent a first-class, versioned artifact.
 
 ## The Solution
 
-**IntentLog is Git, but for intent.**
+**IntentLog is Git, but for intent.** It provides **why tracking** and **rationale version control** through a simple, familiar interface.
 
 | Feature | Description |
 |---------|-------------|
 | **Prose Commits** | Each commit is a natural-language explanation of *why* something changed, cryptographically signed and timestamped |
-| **Branches for Exploration** | Experiment with alternative directions without polluting main history |
+| **Reasoning Branches** | Experiment with alternative directions without polluting main history—explore different reasoning paths |
 | **Semantic Diffs** | LLM-generated readable summaries instead of line-by-line changes |
-| **Merges via Explanation** | Conflicts reconciled with prose commits narrating trade-offs and rationale |
+| **Narrative Merge Conflicts** | Conflicts reconciled with prose commits narrating trade-offs and rationale |
 | **Deferred Formalization** | Ambiguous intent stays in prose; LLMs derive code, rules, or heuristics on demand |
-| **Precedent Trails** | Every commit references prior ones—like case law for your project |
+| **Searchable Decision History** | Every commit references prior ones—like case law for your project, fully searchable |
 
 ## Features
 
@@ -269,6 +275,33 @@ pytest tests/ -v
 # Run benchmarks
 pytest benchmarks/ --benchmark-only
 ```
+
+## Connected Repositories
+
+IntentLog is part of a broader ecosystem exploring **intent preservation**, **human-AI collaboration**, and **digital sovereignty**.
+
+### NatLangChain Ecosystem
+- [**NatLangChain**](https://github.com/kase1111-hash/NatLangChain) - Prose-first, intent-native blockchain protocol for recording human intent in natural language
+- [**RRA-Module**](https://github.com/kase1111-hash/RRA-Module) - Revenant Repo Agent: Converts abandoned GitHub repositories into autonomous AI agents
+- [**mediator-node**](https://github.com/kase1111-hash/mediator-node) - LLM mediation layer for matching, negotiation, and closure proposals
+- [**ILR-module**](https://github.com/kase1111-hash/ILR-module) - IP & Licensing Reconciliation: Dispute resolution for intellectual property conflicts
+- [**Finite-Intent-Executor**](https://github.com/kase1111-hash/Finite-Intent-Executor) - Posthumous execution of predefined intent via Solidity smart contracts
+
+### Agent-OS Ecosystem
+- [**Agent-OS**](https://github.com/kase1111-hash/Agent-OS) - Natural-language native operating system for AI agents
+- [**synth-mind**](https://github.com/kase1111-hash/synth-mind) - NLOS-based agent with interconnected psychological modules for emergent continuity
+- [**boundary-daemon-**](https://github.com/kase1111-hash/boundary-daemon-) - Mandatory trust enforcement layer for Agent-OS defining cognition boundaries
+- [**memory-vault**](https://github.com/kase1111-hash/memory-vault) - Secure, offline-capable, owner-sovereign storage for cognitive artifacts
+- [**value-ledger**](https://github.com/kase1111-hash/value-ledger) - Economic accounting layer for cognitive work (ideas, effort, novelty)
+- [**learning-contracts**](https://github.com/kase1111-hash/learning-contracts) - Safety protocols for AI learning and data management
+
+### Security & Infrastructure
+- [**Boundary-SIEM**](https://github.com/kase1111-hash/Boundary-SIEM) - Security Information and Event Management for AI systems
+
+### Games
+- [**Shredsquatch**](https://github.com/kase1111-hash/Shredsquatch) - 3D first-person snowboarding infinite runner (SkiFree homage)
+- [**Midnight-pulse**](https://github.com/kase1111-hash/Midnight-pulse) - Procedurally generated night drive
+- [**Long-Home**](https://github.com/kase1111-hash/Long-Home) - Godot game project
 
 ## License
 
