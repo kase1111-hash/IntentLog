@@ -116,7 +116,10 @@ class FileLock:
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
         # Open file (create if doesn't exist)
-        self._file = open(self.path, "a+")
+        try:
+            self._file = open(self.path, "a+")
+        except (IOError, OSError) as e:
+            raise FileLockError(f"Failed to open file for locking: {self.path}: {e}") from e
 
         lock_type = fcntl.LOCK_EX if self.exclusive else fcntl.LOCK_SH
 
@@ -153,7 +156,10 @@ class FileLock:
         self.path.parent.mkdir(parents=True, exist_ok=True)
 
         # Open file (create if doesn't exist)
-        self._file = open(self.path, "a+")
+        try:
+            self._file = open(self.path, "a+")
+        except (IOError, OSError) as e:
+            raise FileLockError(f"Failed to open file for locking: {self.path}: {e}") from e
 
         # msvcrt.LK_NBLCK = non-blocking exclusive lock
         # msvcrt.LK_NBRLCK = non-blocking shared lock (not available, use exclusive)
