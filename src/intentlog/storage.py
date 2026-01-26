@@ -23,6 +23,28 @@ from .core import Intent, IntentLog
 from .logging import get_logger, log_context
 from .validation import validate_project_name, validate_branch_name, ValidationError
 
+logger = get_logger(__name__)
+
+
+def _parse_datetime(value: str, field_name: str = "timestamp") -> datetime:
+    """
+    Safely parse an ISO format datetime string.
+
+    Args:
+        value: The datetime string to parse
+        field_name: Name of the field being parsed (for error messages)
+
+    Returns:
+        Parsed datetime object
+
+    Raises:
+        ValueError: If the datetime string is invalid
+    """
+    try:
+        return datetime.fromisoformat(value)
+    except (ValueError, TypeError) as e:
+        raise ValueError(f"Invalid {field_name} format '{value}': {e}") from e
+
 # Lazy imports to avoid circular dependencies
 if TYPE_CHECKING:
     from .merkle import ChainedIntent, ChainVerificationResult
@@ -334,15 +356,19 @@ class IntentLogStorage:
 
         intents = []
         for intent_data in data.get("intents", []):
-            intent = Intent(
-                intent_id=intent_data["intent_id"],
-                intent_name=intent_data["intent_name"],
-                intent_reasoning=intent_data["intent_reasoning"],
-                timestamp=datetime.fromisoformat(intent_data["timestamp"]),
-                metadata=intent_data.get("metadata", {}),
-                parent_intent_id=intent_data.get("parent_intent_id"),
-            )
-            intents.append(intent)
+            try:
+                intent = Intent(
+                    intent_id=intent_data["intent_id"],
+                    intent_name=intent_data["intent_name"],
+                    intent_reasoning=intent_data["intent_reasoning"],
+                    timestamp=_parse_datetime(intent_data["timestamp"]),
+                    metadata=intent_data.get("metadata", {}),
+                    parent_intent_id=intent_data.get("parent_intent_id"),
+                )
+                intents.append(intent)
+            except (KeyError, ValueError) as e:
+                logger.warning(f"Skipping invalid intent data: {e}")
+                continue
 
         return intents
 
@@ -609,21 +635,25 @@ class IntentLogStorage:
 
         chained = []
         for intent_data in data.get("intents", []):
-            # Check if chain data exists
-            if "chain_hash" in intent_data:
-                # Load with existing chain data
-                chained.append(ChainedIntent.from_dict(intent_data))
-            else:
-                # Legacy data without chain - need to rebuild
-                intent = Intent(
-                    intent_id=intent_data["intent_id"],
-                    intent_name=intent_data["intent_name"],
-                    intent_reasoning=intent_data["intent_reasoning"],
-                    timestamp=datetime.fromisoformat(intent_data["timestamp"]),
-                    metadata=intent_data.get("metadata", {}),
-                    parent_intent_id=intent_data.get("parent_intent_id"),
-                )
-                chained.append(intent)
+            try:
+                # Check if chain data exists
+                if "chain_hash" in intent_data:
+                    # Load with existing chain data
+                    chained.append(ChainedIntent.from_dict(intent_data))
+                else:
+                    # Legacy data without chain - need to rebuild
+                    intent = Intent(
+                        intent_id=intent_data["intent_id"],
+                        intent_name=intent_data["intent_name"],
+                        intent_reasoning=intent_data["intent_reasoning"],
+                        timestamp=_parse_datetime(intent_data["timestamp"]),
+                        metadata=intent_data.get("metadata", {}),
+                        parent_intent_id=intent_data.get("parent_intent_id"),
+                    )
+                    chained.append(intent)
+            except (KeyError, ValueError) as e:
+                logger.warning(f"Skipping invalid chained intent data: {e}")
+                continue
 
         # If any items are plain Intent, rebuild the chain
         if chained and isinstance(chained[0], Intent):

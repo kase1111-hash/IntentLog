@@ -21,11 +21,16 @@ import threading
 import uuid
 import json
 import base64
+import binascii
 import os
+import logging
+import re
 from datetime import datetime, timedelta
 from typing import Optional, Dict, Any, List, Callable, Set, TYPE_CHECKING
 from dataclasses import dataclass, field
 from enum import Enum
+
+logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
     from .merkle import ChainedIntent
@@ -209,13 +214,35 @@ class IntentContext:
 
         Returns:
             IntentContext restored from serialized data
+
+        Raises:
+            ValueError: If the encoded data is invalid or malformed
         """
-        json_str = base64.b64decode(encoded.encode()).decode()
-        data = json.loads(json_str)
+        try:
+            json_str = base64.b64decode(encoded.encode()).decode()
+        except (binascii.Error, UnicodeDecodeError) as e:
+            raise ValueError(f"Invalid base64 encoding: {e}") from e
+
+        try:
+            data = json.loads(json_str)
+        except json.JSONDecodeError as e:
+            raise ValueError(f"Invalid JSON in serialized context: {e}") from e
+
+        # Validate required fields
+        required_fields = ["intent_id", "intent_name", "start_time"]
+        missing_fields = [f for f in required_fields if f not in data]
+        if missing_fields:
+            raise ValueError(f"Missing required fields: {', '.join(missing_fields)}")
+
+        try:
+            start_time = datetime.fromisoformat(data["start_time"])
+        except (ValueError, TypeError) as e:
+            raise ValueError(f"Invalid start_time format: {e}") from e
+
         return cls(
             intent_id=data["intent_id"],
             intent_name=data["intent_name"],
-            start_time=datetime.fromisoformat(data["start_time"]),
+            start_time=start_time,
             session_id=data.get("session_id"),
             trace_id=data.get("trace_id"),
             span_id=data.get("span_id"),
@@ -260,12 +287,25 @@ class IntentContext:
         trace_id = None
         parent_span_id = None
 
-        # Parse W3C traceparent header
+        # W3C Trace Context traceparent format: version-trace_id-span_id-flags
+        # version: 2 hex chars, trace_id: 32 hex chars, span_id: 16 hex chars, flags: 2 hex chars
+        traceparent_pattern = re.compile(
+            r"^([0-9a-f]{2})-([0-9a-f]{32})-([0-9a-f]{16})-([0-9a-f]{2})$",
+            re.IGNORECASE
+        )
+
+        # Parse W3C traceparent header with validation
         if "traceparent" in headers:
-            parts = headers["traceparent"].split("-")
-            if len(parts) >= 3:
-                trace_id = parts[1]
-                parent_span_id = parts[2]
+            traceparent = headers["traceparent"]
+            match = traceparent_pattern.match(traceparent)
+            if match:
+                trace_id = match.group(2).lower()
+                parent_span_id = match.group(3).lower()
+            else:
+                logger.warning(
+                    f"Invalid traceparent header format: {traceparent!r}. "
+                    "Expected format: version-trace_id-span_id-flags"
+                )
 
         # Get intent info from custom headers
         intent_id = headers.get("x-intent-id", str(uuid.uuid4()))
@@ -624,8 +664,13 @@ def _invoke_enter_hooks(ctx: IntentContext) -> None:
     for hook in _on_enter_hooks:
         try:
             hook(ctx)
-        except Exception:
-            pass  # Don't let hook errors break context management
+        except Exception as e:
+            # Log but don't let hook errors break context management
+            logger.warning(
+                f"Enter hook {hook.__name__ if hasattr(hook, '__name__') else hook} "
+                f"raised exception for intent '{ctx.intent_name}': {e}",
+                exc_info=True
+            )
 
 
 def _invoke_exit_hooks(ctx: IntentContext, error: Optional[Exception] = None) -> None:
@@ -633,8 +678,13 @@ def _invoke_exit_hooks(ctx: IntentContext, error: Optional[Exception] = None) ->
     for hook in _on_exit_hooks:
         try:
             hook(ctx, error)
-        except Exception:
-            pass  # Don't let hook errors break context management
+        except Exception as e:
+            # Log but don't let hook errors break context management
+            logger.warning(
+                f"Exit hook {hook.__name__ if hasattr(hook, '__name__') else hook} "
+                f"raised exception for intent '{ctx.intent_name}': {e}",
+                exc_info=True
+            )
 
 
 # ============================================================================

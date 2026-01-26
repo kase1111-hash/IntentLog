@@ -13,11 +13,14 @@ Features:
 
 import json
 import hashlib
+import logging
 from datetime import datetime
 from typing import List, Optional, Dict, Any, Tuple
 from dataclasses import dataclass, field
 
 from .core import Intent
+
+logger = logging.getLogger(__name__)
 
 
 # Genesis hash for first intent in chain
@@ -58,12 +61,27 @@ class ChainedIntent:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ChainedIntent":
-        """Create ChainedIntent from dictionary"""
+        """Create ChainedIntent from dictionary.
+
+        Raises:
+            ValueError: If required fields are missing or timestamp format is invalid
+        """
+        required_fields = ["intent_id", "intent_name", "intent_reasoning", "timestamp",
+                          "intent_hash", "prev_hash", "chain_hash", "sequence"]
+        missing_fields = [f for f in required_fields if f not in data]
+        if missing_fields:
+            raise ValueError(f"Missing required fields: {', '.join(missing_fields)}")
+
+        try:
+            timestamp = datetime.fromisoformat(data["timestamp"])
+        except (ValueError, TypeError) as e:
+            raise ValueError(f"Invalid timestamp format: {e}") from e
+
         intent = Intent(
             intent_id=data["intent_id"],
             intent_name=data["intent_name"],
             intent_reasoning=data["intent_reasoning"],
-            timestamp=datetime.fromisoformat(data["timestamp"]),
+            timestamp=timestamp,
             metadata=data.get("metadata", {}),
             parent_intent_id=data.get("parent_intent_id"),
         )

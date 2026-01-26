@@ -51,13 +51,33 @@ class ProvenanceRecord:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ProvenanceRecord":
-        """Create from dictionary"""
+        """Create from dictionary.
+
+        Raises:
+            ValueError: If required fields are missing or have invalid format
+        """
+        required_fields = ["source_intent_ids", "source_reasoning", "formalized_at",
+                          "model", "formalization_type"]
+        missing_fields = [f for f in required_fields if f not in data]
+        if missing_fields:
+            raise ValueError(f"Missing required fields: {', '.join(missing_fields)}")
+
+        try:
+            formalized_at = datetime.fromisoformat(data["formalized_at"])
+        except (ValueError, TypeError) as e:
+            raise ValueError(f"Invalid formalized_at format: {e}") from e
+
+        try:
+            formalization_type = FormalizationType(data["formalization_type"])
+        except ValueError as e:
+            raise ValueError(f"Invalid formalization_type: {e}") from e
+
         return cls(
             source_intent_ids=data["source_intent_ids"],
             source_reasoning=data["source_reasoning"],
-            formalized_at=datetime.fromisoformat(data["formalized_at"]),
+            formalized_at=formalized_at,
             model=data["model"],
-            formalization_type=FormalizationType(data["formalization_type"]),
+            formalization_type=formalization_type,
             parameters=data.get("parameters", {}),
         )
 
