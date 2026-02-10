@@ -31,7 +31,7 @@ try:
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
     ENCRYPTION_AVAILABLE = True
-except ImportError:
+except BaseException:
     ENCRYPTION_AVAILABLE = False
     Fernet = None
     InvalidToken = Exception

@@ -9,6 +9,8 @@ __version__ = "0.1.0"
 __author__ = "IntentLog Contributors"
 __license__ = "CC BY-SA 4.0"
 
+# ---- Core imports (always available, no external deps) ----
+
 from .core import IntentLog, Intent
 from .audit import audit_logs
 from .logging import (
@@ -21,20 +23,12 @@ from .logging import (
     LogContext,
     IntentLogLogger,
 )
-from .ratelimit import (
-    RateLimiter,
-    RateLimitConfig,
-    RetryConfig,
-    RetryStrategy,
-    TokenBucket,
-    CircuitBreaker,
-    CircuitBreakerConfig,
-    RateLimitExceeded,
-    CircuitOpenError,
-    with_retry,
-    with_rate_limit,
-    get_llm_rate_limiter,
-    configure_llm_rate_limit,
+from .validation import (
+    validate_project_name,
+    validate_branch_name,
+    validate_path_within_directory,
+    sanitize_filename,
+    ValidationError,
 )
 from .storage import (
     IntentLogStorage,
@@ -48,18 +42,6 @@ from .storage import (
     BranchNotFoundError,
     BranchExistsError,
 )
-from .semantic import (
-    SemanticEngine,
-    SemanticDiff,
-    SemanticSearchResult,
-    MergeResolution,
-    # Deferred Formalization
-    FormalizationType,
-    FormalizedOutput,
-    ProvenanceRecord,
-)
-
-# Phase 2: Cryptographic Integrity
 from .merkle import (
     ChainedIntent,
     MerkleChain,
@@ -70,164 +52,178 @@ from .merkle import (
     GENESIS_HASH,
 )
 
-# Crypto imports are optional (requires cryptography library)
-# Note: cryptography can fail with various exceptions including ImportError,
-# RuntimeError (Rust binding failures), or other system-level errors
+# ---- Crypto availability flag (set by lazy loader or direct import) ----
+
+CRYPTO_AVAILABLE = False
 try:
-    from .crypto import (
-        KeyManager,
-        KeyPair,
-        Signature,
-        generate_key_pair,
-        sign_data,
-        verify_signature,
-        CryptoError,
-        KeyNotFoundError,
-        SignatureError,
-        CRYPTO_AVAILABLE,
-    )
-except Exception:
-    # Crypto not available (ImportError, RuntimeError, or cryptography binding failures)
-    CRYPTO_AVAILABLE = False
-    KeyManager = None
-    KeyPair = None
-    Signature = None
-    generate_key_pair = None
-    sign_data = None
-    verify_signature = None
-    CryptoError = Exception
-    KeyNotFoundError = Exception
-    SignatureError = Exception
+    from .crypto import CRYPTO_AVAILABLE
+except BaseException:
+    pass
 
-# Phase 4: Analytics and Metrics
-from .export import IntentExporter, ExportFilter, ExportFormat, AnonymizationConfig
-from .analytics import IntentAnalytics, AnalyticsReport, LatencyStats, FrequencyStats
-from .metrics import IntentMetrics, IntentDensity, AuditabilityScore, FraudResistance
-from .sufficiency import SufficiencyTest, SufficiencyReport, run_sufficiency_test
+# ---- Lazy loading for non-core modules ----
+# These are loaded on first access to avoid import-time failures
+# (e.g., cryptography library Rust binding panics) and to keep
+# package load time fast.
 
-# Phase 5: Context and Decorator
-from .context import (
-    IntentContext,
-    IntentContextManager,
-    SessionContext,
-    SessionContextManager,
-    get_current_intent,
-    set_current_intent,
-    get_current_session,
-    set_current_session,
-    get_intent_chain,
-    get_current_depth,
-    get_session_id,
-    intent_scope,
-    session_scope,
-    # Extended context features
-    ContextStatus,
-    EnhancedIntentContextManager,
-    intent_scope_enhanced,
-    register_on_enter_hook,
-    register_on_exit_hook,
-    unregister_on_enter_hook,
-    unregister_on_exit_hook,
-    clear_hooks,
-    propagate_context_to_env,
-    restore_context_from_env,
-    get_all_tags,
-    get_all_labels,
-    has_tag_in_chain,
-    get_root_context,
-    get_trace_id,
-    get_span_id,
-    with_tags,
-    with_labels,
-    INTENT_CONTEXT_ENV_VAR,
-)
-from .decorator import (
-    intent_logger,
-    intent_logger_class,
-    IntentLoggerConfig,
-    LogLevel,
-    set_log_level,
-    get_log_level,
-    should_log,
-    get_intent_log,
-    clear_intent_log,
-    log_intent,
-    trace,
-)
+_LAZY_MODULES = {
+    # Crypto (requires cryptography library)
+    "KeyManager": ".crypto",
+    "KeyPair": ".crypto",
+    "Signature": ".crypto",
+    "generate_key_pair": ".crypto",
+    "sign_data": ".crypto",
+    "verify_signature": ".crypto",
+    "CryptoError": ".crypto",
+    "KeyNotFoundError": ".crypto",
+    "SignatureError": ".crypto",
+    # Semantic (requires LLM providers)
+    "SemanticEngine": ".semantic",
+    "SemanticDiff": ".semantic",
+    "SemanticSearchResult": ".semantic",
+    "MergeResolution": ".semantic",
+    "FormalizationType": ".semantic",
+    "FormalizedOutput": ".semantic",
+    "ProvenanceRecord": ".semantic",
+    # Analytics & Metrics
+    "IntentExporter": ".export",
+    "ExportFilter": ".export",
+    "ExportFormat": ".export",
+    "AnonymizationConfig": ".export",
+    "IntentAnalytics": ".analytics",
+    "AnalyticsReport": ".analytics",
+    "LatencyStats": ".analytics",
+    "FrequencyStats": ".analytics",
+    "IntentMetrics": ".metrics",
+    "IntentDensity": ".metrics",
+    "AuditabilityScore": ".metrics",
+    "FraudResistance": ".metrics",
+    "SufficiencyTest": ".sufficiency",
+    "SufficiencyReport": ".sufficiency",
+    "run_sufficiency_test": ".sufficiency",
+    # Context & Decorator
+    "IntentContext": ".context",
+    "IntentContextManager": ".context",
+    "SessionContext": ".context",
+    "SessionContextManager": ".context",
+    "get_current_intent": ".context",
+    "set_current_intent": ".context",
+    "get_current_session": ".context",
+    "set_current_session": ".context",
+    "get_intent_chain": ".context",
+    "get_current_depth": ".context",
+    "get_session_id": ".context",
+    "intent_scope": ".context",
+    "session_scope": ".context",
+    "ContextStatus": ".context",
+    "EnhancedIntentContextManager": ".context",
+    "intent_scope_enhanced": ".context",
+    "register_on_enter_hook": ".context",
+    "register_on_exit_hook": ".context",
+    "unregister_on_enter_hook": ".context",
+    "unregister_on_exit_hook": ".context",
+    "clear_hooks": ".context",
+    "propagate_context_to_env": ".context",
+    "restore_context_from_env": ".context",
+    "get_all_tags": ".context",
+    "get_all_labels": ".context",
+    "has_tag_in_chain": ".context",
+    "get_root_context": ".context",
+    "get_trace_id": ".context",
+    "get_span_id": ".context",
+    "with_tags": ".context",
+    "with_labels": ".context",
+    "INTENT_CONTEXT_ENV_VAR": ".context",
+    "intent_logger": ".decorator",
+    "intent_logger_class": ".decorator",
+    "IntentLoggerConfig": ".decorator",
+    "LogLevel": ".decorator",
+    "set_log_level": ".decorator",
+    "get_log_level": ".decorator",
+    "should_log": ".decorator",
+    "get_intent_log": ".decorator",
+    "clear_intent_log": ".decorator",
+    "log_intent": ".decorator",
+    "trace": ".decorator",
+    # Rate Limiting
+    "RateLimiter": ".ratelimit",
+    "RateLimitConfig": ".ratelimit",
+    "RetryConfig": ".ratelimit",
+    "RetryStrategy": ".ratelimit",
+    "TokenBucket": ".ratelimit",
+    "CircuitBreaker": ".ratelimit",
+    "CircuitBreakerConfig": ".ratelimit",
+    "RateLimitExceeded": ".ratelimit",
+    "CircuitOpenError": ".ratelimit",
+    "with_retry": ".ratelimit",
+    "with_rate_limit": ".ratelimit",
+    "get_llm_rate_limiter": ".ratelimit",
+    "configure_llm_rate_limit": ".ratelimit",
+    # Triggers
+    "TriggerType": ".triggers",
+    "TriggerResponse": ".triggers",
+    "SensitivityLevel": ".triggers",
+    "TriggerRequest": ".triggers",
+    "TriggerResult": ".triggers",
+    "TriggerDeniedError": ".triggers",
+    "TriggerTimeoutError": ".triggers",
+    "TriggerHandlerBase": ".triggers",
+    "ConsoleTriggerHandler": ".triggers",
+    "CallbackTriggerHandler": ".triggers",
+    "set_trigger_handler": ".triggers",
+    "get_trigger_handler": ".triggers",
+    "get_trigger_history": ".triggers",
+    "clear_trigger_history": ".triggers",
+    "require_human_approval": ".triggers",
+    "notify_human": ".triggers",
+    "requires_approval": ".triggers",
+    "requires_confirmation": ".triggers",
+    "requires_review": ".triggers",
+    "TriggerScope": ".triggers",
+    "sensitive_operation": ".triggers",
+    "CommonTriggers": ".triggers",
+    "database_write": ".triggers",
+    "email_send": ".triggers",
+    "external_api_call": ".triggers",
+    "file_operation": ".triggers",
+    "payment_processing": ".triggers",
+    # Privacy Controls
+    "PrivacyLevel": ".privacy",
+    "AccessPolicy": ".privacy",
+    "EncryptionKey": ".privacy",
+    "EncryptedContent": ".privacy",
+    "IntentEncryptor": ".privacy",
+    "EncryptionKeyManager": ".privacy",
+    "RevocationRecord": ".privacy",
+    "RevocationManager": ".privacy",
+    "PrivacyManager": ".privacy",
+    "PrivacyError": ".privacy",
+    "EncryptionError": ".privacy",
+    "AccessDeniedError": ".privacy",
+    "KeyManagementError": ".privacy",
+    "RevocationError": ".privacy",
+    "ENCRYPTION_AVAILABLE": ".privacy",
+    # Backup and Recovery
+    "BackupManager": ".backup",
+    "BackupMetadata": ".backup",
+    "RestoreResult": ".backup",
+    "BackupError": ".backup",
+    "RestoreError": ".backup",
+    "create_backup": ".backup",
+    "restore_backup": ".backup",
+    "list_backups": ".backup",
+}
 
-# Phase 9: Human-in-the-Loop Triggers
-from .triggers import (
-    TriggerType,
-    TriggerResponse,
-    SensitivityLevel,
-    TriggerRequest,
-    TriggerResult,
-    TriggerDeniedError,
-    TriggerTimeoutError,
-    TriggerHandlerBase,
-    ConsoleTriggerHandler,
-    CallbackTriggerHandler,
-    set_trigger_handler,
-    get_trigger_handler,
-    get_trigger_history,
-    clear_trigger_history,
-    require_human_approval,
-    notify_human,
-    requires_approval,
-    requires_confirmation,
-    requires_review,
-    TriggerScope,
-    sensitive_operation,
-    CommonTriggers,
-    database_write,
-    email_send,
-    external_api_call,
-    file_operation,
-    payment_processing,
-)
 
-# Phase 6: Privacy Controls (MP-02 Section 12)
-from .privacy import (
-    PrivacyLevel,
-    AccessPolicy,
-    EncryptionKey,
-    EncryptedContent,
-    IntentEncryptor,
-    EncryptionKeyManager,
-    RevocationRecord,
-    RevocationManager,
-    PrivacyManager,
-    PrivacyError,
-    EncryptionError,
-    AccessDeniedError,
-    KeyManagementError,
-    RevocationError,
-    ENCRYPTION_AVAILABLE,
-)
+def __getattr__(name):
+    if name in _LAZY_MODULES:
+        import importlib
+        module = importlib.import_module(_LAZY_MODULES[name], __name__)
+        return getattr(module, name)
+    raise AttributeError(f"module 'intentlog' has no attribute {name!r}")
 
-# Backup and Recovery
-from .backup import (
-    BackupManager,
-    BackupMetadata,
-    RestoreResult,
-    BackupError,
-    RestoreError,
-    create_backup,
-    restore_backup,
-    list_backups,
-)
-
-# Input Validation
-from .validation import (
-    validate_project_name,
-    validate_branch_name,
-    validate_intent_name,
-    validate_path_within_directory,
-    sanitize_filename,
-    ValidationError,
-)
 
 __all__ = [
+    # Core
     "IntentLog",
     "Intent",
     "audit_logs",
@@ -240,20 +236,12 @@ __all__ = [
     "StructuredLogLevel",
     "LogContext",
     "IntentLogLogger",
-    # Rate Limiting
-    "RateLimiter",
-    "RateLimitConfig",
-    "RetryConfig",
-    "RetryStrategy",
-    "TokenBucket",
-    "CircuitBreaker",
-    "CircuitBreakerConfig",
-    "RateLimitExceeded",
-    "CircuitOpenError",
-    "with_retry",
-    "with_rate_limit",
-    "get_llm_rate_limiter",
-    "configure_llm_rate_limit",
+    # Validation
+    "validate_project_name",
+    "validate_branch_name",
+    "validate_path_within_directory",
+    "sanitize_filename",
+    "ValidationError",
     # Storage
     "IntentLogStorage",
     "ProjectConfig",
@@ -265,15 +253,7 @@ __all__ = [
     "ProjectExistsError",
     "BranchNotFoundError",
     "BranchExistsError",
-    "SemanticEngine",
-    "SemanticDiff",
-    "SemanticSearchResult",
-    "MergeResolution",
-    # Deferred Formalization
-    "FormalizationType",
-    "FormalizedOutput",
-    "ProvenanceRecord",
-    # Phase 2: Cryptographic Integrity
+    # Merkle
     "ChainedIntent",
     "MerkleChain",
     "chain_intents",
@@ -281,6 +261,8 @@ __all__ = [
     "compute_root_hash",
     "ChainVerificationResult",
     "GENESIS_HASH",
+    # Crypto (lazy)
+    "CRYPTO_AVAILABLE",
     "KeyManager",
     "KeyPair",
     "Signature",
@@ -290,8 +272,15 @@ __all__ = [
     "CryptoError",
     "KeyNotFoundError",
     "SignatureError",
-    "CRYPTO_AVAILABLE",
-    # Phase 4: Analytics and Metrics
+    # Semantic (lazy)
+    "SemanticEngine",
+    "SemanticDiff",
+    "SemanticSearchResult",
+    "MergeResolution",
+    "FormalizationType",
+    "FormalizedOutput",
+    "ProvenanceRecord",
+    # Analytics (lazy)
     "IntentExporter",
     "ExportFilter",
     "ExportFormat",
@@ -307,7 +296,7 @@ __all__ = [
     "SufficiencyTest",
     "SufficiencyReport",
     "run_sufficiency_test",
-    # Phase 5: Context and Decorator
+    # Context & Decorator (lazy)
     "IntentContext",
     "IntentContextManager",
     "SessionContext",
@@ -321,7 +310,6 @@ __all__ = [
     "get_session_id",
     "intent_scope",
     "session_scope",
-    # Extended context features
     "ContextStatus",
     "EnhancedIntentContextManager",
     "intent_scope_enhanced",
@@ -352,23 +340,21 @@ __all__ = [
     "clear_intent_log",
     "log_intent",
     "trace",
-    # Phase 6: Privacy Controls
-    "PrivacyLevel",
-    "AccessPolicy",
-    "EncryptionKey",
-    "EncryptedContent",
-    "IntentEncryptor",
-    "EncryptionKeyManager",
-    "RevocationRecord",
-    "RevocationManager",
-    "PrivacyManager",
-    "PrivacyError",
-    "EncryptionError",
-    "AccessDeniedError",
-    "KeyManagementError",
-    "RevocationError",
-    "ENCRYPTION_AVAILABLE",
-    # Phase 9: HITL Triggers
+    # Rate Limiting (lazy)
+    "RateLimiter",
+    "RateLimitConfig",
+    "RetryConfig",
+    "RetryStrategy",
+    "TokenBucket",
+    "CircuitBreaker",
+    "CircuitBreakerConfig",
+    "RateLimitExceeded",
+    "CircuitOpenError",
+    "with_retry",
+    "with_rate_limit",
+    "get_llm_rate_limiter",
+    "configure_llm_rate_limit",
+    # Triggers (lazy)
     "TriggerType",
     "TriggerResponse",
     "SensitivityLevel",
@@ -396,7 +382,23 @@ __all__ = [
     "external_api_call",
     "file_operation",
     "payment_processing",
-    # Backup and Recovery
+    # Privacy Controls (lazy)
+    "PrivacyLevel",
+    "AccessPolicy",
+    "EncryptionKey",
+    "EncryptedContent",
+    "IntentEncryptor",
+    "EncryptionKeyManager",
+    "RevocationRecord",
+    "RevocationManager",
+    "PrivacyManager",
+    "PrivacyError",
+    "EncryptionError",
+    "AccessDeniedError",
+    "KeyManagementError",
+    "RevocationError",
+    "ENCRYPTION_AVAILABLE",
+    # Backup (lazy)
     "BackupManager",
     "BackupMetadata",
     "RestoreResult",
@@ -405,12 +407,5 @@ __all__ = [
     "create_backup",
     "restore_backup",
     "list_backups",
-    # Input Validation
-    "validate_project_name",
-    "validate_branch_name",
-    "validate_intent_name",
-    "validate_path_within_directory",
-    "sanitize_filename",
-    "ValidationError",
     "__version__",
 ]

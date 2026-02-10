@@ -51,7 +51,7 @@ try:
         CRYPTO_AVAILABLE,
     )
     HAS_CRYPTO = CRYPTO_AVAILABLE
-except ImportError:
+except BaseException:
     HAS_CRYPTO = False
 
 

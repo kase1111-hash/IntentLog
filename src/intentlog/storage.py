@@ -14,6 +14,7 @@ Supports:
 import json
 import os
 import hashlib
+import tempfile
 from pathlib import Path
 from datetime import datetime
 from typing import Optional, Dict, Any, List, Tuple, TYPE_CHECKING
@@ -24,6 +25,29 @@ from .logging import get_logger, log_context
 from .validation import validate_project_name, validate_branch_name, ValidationError
 
 logger = get_logger(__name__)
+
+
+def _atomic_write_json(path: Path, data: Any, indent: int = 2) -> None:
+    """
+    Atomically write JSON data to a file.
+
+    Writes to a temporary file in the same directory, then renames it
+    into place. os.replace() is atomic on POSIX systems, so a crash
+    mid-write will leave either the old file or the new file, never a
+    partial write.
+    """
+    parent = path.parent
+    fd, tmp_path = tempfile.mkstemp(dir=parent, suffix=".tmp", prefix=".intentlog_")
+    try:
+        with os.fdopen(fd, 'w') as f:
+            json.dump(data, f, indent=indent)
+        os.replace(tmp_path, path)
+    except BaseException:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def _parse_datetime(value: str, field_name: str = "timestamp") -> datetime:
@@ -283,13 +307,11 @@ class IntentLogStorage:
 
         # Create config
         config = ProjectConfig(project_name=project_name)
-        with open(self.config_path, 'w') as f:
-            json.dump(config.to_dict(), f, indent=2)
+        _atomic_write_json(self.config_path, config.to_dict())
 
         # Create empty main branch intents
         main_intents_path = self._get_branch_file("main")
-        with open(main_intents_path, 'w') as f:
-            json.dump({"intents": [], "branch": "main"}, f, indent=2)
+        _atomic_write_json(main_intents_path, {"intents": [], "branch": "main"})
 
         # Create .gitignore for sensitive data
         gitignore_path = self.intentlog_dir / ".gitignore"
@@ -324,8 +346,7 @@ class IntentLogStorage:
 
     def save_config(self, config: ProjectConfig) -> None:
         """Save project configuration"""
-        with open(self.config_path, 'w') as f:
-            json.dump(config.to_dict(), f, indent=2)
+        _atomic_write_json(self.config_path, config.to_dict())
 
     def load_intents(self, branch: Optional[str] = None) -> List[Intent]:
         """
@@ -402,8 +423,7 @@ class IntentLogStorage:
         }
 
         with self._lock_file(branch_file, exclusive=True):
-            with open(branch_file, 'w') as f:
-                json.dump(data, f, indent=2)
+            _atomic_write_json(branch_file, data)
 
     def add_intent(
         self,
@@ -496,8 +516,7 @@ class IntentLogStorage:
             ],
         }
 
-        with open(new_branch_file, 'w') as f:
-            json.dump(data, f, indent=2)
+        _atomic_write_json(new_branch_file, data)
 
         logger.info("Branch created", branch=branch_name, intents_copied=len(intents))
 
@@ -689,8 +708,7 @@ class IntentLogStorage:
         }
 
         with self._lock_file(branch_file, exclusive=True):
-            with open(branch_file, 'w') as f:
-                json.dump(data, f, indent=2)
+            _atomic_write_json(branch_file, data)
 
     def add_chained_intent(
         self,
