@@ -123,7 +123,7 @@ class ProjectConfig:
     project_name: str
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())
     current_branch: str = "main"
-    version: str = "0.1.0"
+    version: str = "0.2.0"
     llm: LLMSettings = field(default_factory=LLMSettings)
     git_root: str = ""  # Path to git repo root, if detected
 
