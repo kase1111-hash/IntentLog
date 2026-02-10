@@ -3,6 +3,8 @@ Tests for LLM module
 """
 
 import pytest
+
+pytestmark = pytest.mark.llm
 from datetime import datetime
 
 from intentlog.llm.provider import (

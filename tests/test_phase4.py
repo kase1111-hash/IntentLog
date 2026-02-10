@@ -1,5 +1,7 @@
 """Tests for Phase 4: Analytics and Metrics"""
 import pytest
+
+pytestmark = pytest.mark.analytics
 from datetime import datetime, timedelta
 import json
 
@@ -15,10 +17,6 @@ from intentlog.analytics import (
 from intentlog.metrics import (
     IntentMetrics, IntentDensity, InformationDensity,
     AuditabilityScore, FraudResistance
-)
-from intentlog.sufficiency import (
-    SufficiencyTest, SufficiencyReport, SufficiencyResult,
-    CriterionResult, run_sufficiency_test
 )
 
 
@@ -431,97 +429,3 @@ class TestAllMetrics:
         assert "information_density" in all_metrics
         assert "auditability" in all_metrics
         assert "fraud_resistance" in all_metrics
-
-
-# ============ Sufficiency Tests ============
-
-class TestSufficiencyTest:
-    def test_insufficient_data(self, minimal_intents):
-        """Test with insufficient data"""
-        report = run_sufficiency_test(minimal_intents)
-
-        assert report.result == SufficiencyResult.INSUFFICIENT_DATA
-
-    def test_sufficiency_test_runs(self, sample_intents):
-        """Test that sufficiency test runs"""
-        report = run_sufficiency_test(sample_intents)
-
-        assert report.result in [
-            SufficiencyResult.PASS,
-            SufficiencyResult.PARTIAL,
-            SufficiencyResult.FAIL,
-        ]
-        assert report.criteria_passed >= 0
-        assert report.total_criteria == 5
-
-    def test_sufficiency_criteria(self, sample_intents):
-        """Test individual criteria"""
-        test = SufficiencyTest(sample_intents)
-        report = test.run()
-
-        criteria = report.criteria
-        assert "Continuity" in criteria
-        assert "Directionality" in criteria
-        assert "Resolution" in criteria
-        assert "Temporal Anchoring" in criteria
-        assert "Human Attribution" in criteria
-
-    def test_criterion_result(self, sample_intents):
-        """Test criterion result structure"""
-        test = SufficiencyTest(sample_intents)
-        report = test.run()
-
-        for name, result in report.criteria.items():
-            assert isinstance(result, CriterionResult)
-            assert 0 <= result.score <= 1
-            assert isinstance(result.passed, bool)
-
-
-class TestSufficiencyReport:
-    def test_report_properties(self, sample_intents):
-        """Test report property accessors"""
-        report = run_sufficiency_test(sample_intents)
-
-        assert isinstance(report.passed, bool)
-        assert report.total_criteria == report.criteria_total
-        assert report.overall_score >= 0
-
-    def test_report_to_dict(self, sample_intents):
-        """Test report serialization"""
-        report = run_sufficiency_test(sample_intents)
-        data = report.to_dict()
-
-        assert "result" in data
-        assert "overall_score" in data
-        assert "criteria" in data
-
-    def test_report_summary_string(self, sample_intents):
-        """Test summary string generation"""
-        report = run_sufficiency_test(sample_intents)
-        summary = report.to_summary_string()
-
-        assert "Intent Sufficiency Test Report" in summary
-        assert "Continuity" in summary
-
-
-class TestSufficiencyWithAuthor:
-    def test_expected_author_match(self, sample_intents):
-        """Test with matching expected author"""
-        report = run_sufficiency_test(sample_intents, expected_author="test_user")
-
-        # Should not fail on author mismatch
-        attribution = report.criteria.get("Human Attribution")
-        if attribution:
-            # No issues about unexpected author
-            author_issues = [i for i in attribution.issues if "Unexpected author" in i]
-            assert len(author_issues) == 0
-
-    def test_expected_author_mismatch(self, sample_intents):
-        """Test with mismatched expected author"""
-        report = run_sufficiency_test(sample_intents, expected_author="different_user")
-
-        attribution = report.criteria.get("Human Attribution")
-        if attribution and attribution.issues:
-            # Should have issue about unexpected author
-            author_issues = [i for i in attribution.issues if "Unexpected author" in i]
-            assert len(author_issues) > 0

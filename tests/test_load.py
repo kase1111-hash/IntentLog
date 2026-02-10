@@ -8,6 +8,7 @@ This module provides load and stress tests for IntentLog to verify:
 - Memory usage patterns
 - Chain integrity under stress
 """
+import pytest
 
 import os
 import sys
@@ -26,10 +27,13 @@ import pytest
 
 # Skip entire module if running in CI without load test flag
 LOAD_TEST_ENABLED = os.environ.get("INTENTLOG_LOAD_TEST", "0") == "1"
-pytestmark = pytest.mark.skipif(
-    not LOAD_TEST_ENABLED,
-    reason="Load tests disabled. Set INTENTLOG_LOAD_TEST=1 to enable."
-)
+pytestmark = [
+    pytest.mark.load,
+    pytest.mark.skipif(
+        not LOAD_TEST_ENABLED,
+        reason="Load tests disabled. Set INTENTLOG_LOAD_TEST=1 to enable."
+    ),
+]
 
 
 @dataclass
