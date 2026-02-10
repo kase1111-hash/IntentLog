@@ -1,9 +1,11 @@
 """
 Core CLI commands for IntentLog.
 
-Commands: init, commit, branch, log, search, audit, status, diff, merge, config
+Commands: init, commit, branch, log, search, audit, status, diff, merge, config,
+          show, hooks, blame
 """
 
+import json as _json
 import sys
 from pathlib import Path
 from datetime import datetime
@@ -16,6 +18,7 @@ from ..storage import (
     BranchExistsError,
     compute_intent_hash,
 )
+from ..git import detect_git_repo, get_git_context
 from ..audit import audit_logs, print_audit_results
 from .utils import (
     get_storage,
@@ -35,9 +38,18 @@ def cmd_init(args):
 
     try:
         config = storage.init_project(project_name, force=force)
+
+        # Detect git repository
+        git_root = detect_git_repo(storage.project_root)
+        if git_root:
+            config.git_root = str(git_root)
+            storage.save_config(config)
+
         print(f"Initialized IntentLog project: {config.project_name}")
         print(f"  Location: {storage.intentlog_dir}")
         print(f"  Branch: {config.current_branch}")
+        if git_root:
+            print(f"  Git repo: {git_root}")
         print("Ready to track intent. Use 'ilog commit <message>' to add your first intent.")
     except ProjectExistsError as e:
         print(f"Error: {e}")
@@ -62,6 +74,14 @@ def cmd_commit(args):
 
     # Build metadata
     metadata = {}
+
+    # Capture git context if in a git repo
+    if config.git_root:
+        git_root = Path(config.git_root)
+        if git_root.is_dir():
+            git_ctx = get_git_context(git_root)
+            if git_ctx:
+                metadata["git_context"] = git_ctx
 
     # Handle --attach flag
     if attach:
@@ -98,6 +118,22 @@ def cmd_commit(args):
             print(f"  Signed: {chained.signature.get('key_id', 'unknown')}")
         if attach and metadata.get("attached_files"):
             print(f"  Files: {len(metadata['attached_files'])} attached")
+
+        # Show git context if captured
+        git_ctx = metadata.get("git_context")
+        if git_ctx:
+            git_branch = git_ctx.get("branch", "")
+            git_commit = git_ctx.get("commit", "")[:12]
+            staged = git_ctx.get("staged_files", [])
+            parts = []
+            if git_branch:
+                parts.append(git_branch)
+            if git_commit:
+                parts.append(git_commit)
+            if parts:
+                print(f"  Git: {' @ '.join(parts)}")
+            if staged:
+                print(f"  Staged: {len(staged)} file(s)")
     except ValueError as e:
         print(f"Error: {e}")
         sys.exit(1)
@@ -153,6 +189,8 @@ def cmd_log(args):
     """Show intent log history"""
     limit = getattr(args, 'limit', 10)
     branch = getattr(args, 'branch', None)
+    git_commit_filter = getattr(args, 'git_commit', None)
+    json_output = getattr(args, 'json', False)
 
     storage = IntentLogStorage()
 
@@ -168,7 +206,38 @@ def cmd_log(args):
         sys.exit(1)
 
     if not intents:
-        print(f"No intents on branch '{branch}'")
+        if json_output:
+            print("[]")
+        else:
+            print(f"No intents on branch '{branch}'")
+        return
+
+    # Filter by git commit if requested
+    if git_commit_filter:
+        filtered = []
+        for intent in intents:
+            git_ctx = intent.metadata.get("git_context", {})
+            commit = git_ctx.get("commit", "")
+            if commit and commit.startswith(git_commit_filter):
+                filtered.append(intent)
+        intents = filtered
+        if not intents:
+            if json_output:
+                print("[]")
+            else:
+                print(f"No intents linked to git commit '{git_commit_filter}'")
+            return
+
+    # JSON output mode
+    if json_output:
+        output = []
+        for intent in reversed(intents):
+            if len(output) >= limit:
+                break
+            entry = intent.to_dict()
+            entry["hash"] = compute_intent_hash(intent)
+            output.append(entry)
+        print(_json.dumps(output, indent=2, default=str))
         return
 
     print(f"Intent log for '{branch}' ({len(intents)} total):\n")
@@ -192,6 +261,19 @@ def cmd_log(args):
         if len(reasoning) > 100:
             reasoning = reasoning[:97] + "..."
         print(f"  {reasoning}")
+
+        # Show git context if available
+        git_ctx = intent.metadata.get("git_context", {})
+        if git_ctx:
+            git_branch = git_ctx.get("branch", "")
+            git_hash = git_ctx.get("commit", "")[:12]
+            parts = []
+            if git_branch:
+                parts.append(git_branch)
+            if git_hash:
+                parts.append(git_hash)
+            if parts:
+                print(f"  git: {' @ '.join(parts)}")
 
         # Show attached files if any
         if intent.metadata.get("attached_files"):
@@ -308,6 +390,7 @@ def cmd_audit(args):
 
 def cmd_status(args):
     """Show project status"""
+    json_output = getattr(args, 'json', False)
     storage = IntentLogStorage()
 
     try:
@@ -318,10 +401,42 @@ def cmd_status(args):
         print(f"Error: {e}")
         sys.exit(1)
 
+    if json_output:
+        data = {
+            "project": config.project_name,
+            "branch": config.current_branch,
+            "intents": len(intents),
+            "branches": branches,
+        }
+        if config.git_root:
+            from ..git import get_git_branch, get_git_head
+            git_root = Path(config.git_root)
+            data["git"] = {
+                "root": config.git_root,
+                "branch": get_git_branch(git_root) or "",
+                "head": get_git_head(git_root) or "",
+            }
+        print(_json.dumps(data, indent=2))
+        return
+
     print(f"Project: {config.project_name}")
     print(f"Branch:  {config.current_branch}")
     print(f"Intents: {len(intents)}")
     print(f"Branches: {len(branches)} ({', '.join(branches)})")
+
+    # Show git context if available
+    if config.git_root:
+        from ..git import get_git_branch, get_git_head
+        git_root = Path(config.git_root)
+        git_branch = get_git_branch(git_root)
+        git_head = get_git_head(git_root)
+        if git_branch or git_head:
+            parts = []
+            if git_branch:
+                parts.append(git_branch)
+            if git_head:
+                parts.append(git_head[:12])
+            print(f"Git:     {' @ '.join(parts)}")
 
     # Show LLM config if set
     if config.llm.is_configured():
@@ -507,6 +622,211 @@ def cmd_config(args):
         print("Available: llm, show")
 
 
+def cmd_show(args):
+    """Show a single intent with full metadata"""
+    intent_id = args.intent_id
+    branch = getattr(args, 'branch', None)
+    json_output = getattr(args, 'json', False)
+
+    storage = IntentLogStorage()
+
+    try:
+        config = storage.load_config()
+        branch = branch or config.current_branch
+        intents = storage.load_intents(branch)
+    except ProjectNotFoundError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+    except BranchNotFoundError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+    # Find intent by ID prefix or hash prefix
+    found = None
+    for intent in intents:
+        if intent.intent_id.startswith(intent_id):
+            found = intent
+            break
+        if compute_intent_hash(intent).startswith(intent_id):
+            found = intent
+            break
+
+    if not found:
+        print(f"Error: No intent matching '{intent_id}' on branch '{branch}'")
+        sys.exit(1)
+
+    if json_output:
+        entry = found.to_dict()
+        entry["hash"] = compute_intent_hash(found)
+        print(_json.dumps(entry, indent=2, default=str))
+        return
+
+    intent_hash = compute_intent_hash(found)
+    print(f"Intent {intent_hash}")
+    print(f"ID:        {found.intent_id}")
+    print(f"Name:      {found.intent_name}")
+    print(f"Timestamp: {format_timestamp(found.timestamp)}")
+    if found.parent_intent_id:
+        print(f"Parent:    {found.parent_intent_id[:12]}")
+    print(f"\nReasoning:\n  {found.intent_reasoning}")
+
+    # Git context
+    git_ctx = found.metadata.get("git_context", {})
+    if git_ctx:
+        print(f"\nGit Context:")
+        if git_ctx.get("branch"):
+            print(f"  Branch: {git_ctx['branch']}")
+        if git_ctx.get("commit"):
+            print(f"  Commit: {git_ctx['commit']}")
+        staged = git_ctx.get("staged_files", [])
+        if staged:
+            print(f"  Staged files:")
+            for f in staged[:20]:
+                print(f"    {f}")
+            if len(staged) > 20:
+                print(f"    ... and {len(staged) - 20} more")
+
+    # Attached files
+    attached = found.metadata.get("attached_files", {})
+    if attached:
+        print(f"\nAttached Files:")
+        for fpath, fhash in list(attached.items())[:20]:
+            print(f"  {fhash} {fpath}")
+
+    # Other metadata (exclude keys we already displayed)
+    other_meta = {k: v for k, v in found.metadata.items()
+                  if k not in ("git_context", "attached_files")}
+    if other_meta:
+        print(f"\nMetadata:")
+        for k, v in other_meta.items():
+            print(f"  {k}: {v}")
+
+
+def cmd_hooks(args):
+    """Manage IntentLog git hooks"""
+    action = args.action
+
+    storage = IntentLogStorage()
+
+    try:
+        config = storage.load_config()
+    except ProjectNotFoundError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+    if not config.git_root:
+        print("Error: No git repository detected.")
+        print("Run 'ilog init' in a git repository first.")
+        sys.exit(1)
+
+    from ..git import install_hooks, uninstall_hooks, hooks_status
+
+    git_root = Path(config.git_root)
+
+    if action == "install":
+        try:
+            installed = install_hooks(git_root)
+        except FileNotFoundError as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+
+        if not installed:
+            print("Could not install hooks: existing hooks found.")
+            print("Remove existing hooks first or install manually.")
+            sys.exit(1)
+
+        for hook in installed:
+            print(f"  Installed: {hook}")
+        print("Git hooks installed successfully.")
+
+    elif action == "uninstall":
+        removed = uninstall_hooks(git_root)
+        if removed:
+            for hook in removed:
+                print(f"  Removed: {hook}")
+            print("Git hooks removed.")
+        else:
+            print("No IntentLog hooks found to remove.")
+
+    elif action == "status":
+        status = hooks_status(git_root)
+        if not status:
+            print("Git hooks directory not found.")
+            return
+        print("Git hook status:")
+        for hook, state in status.items():
+            print(f"  {hook}: {state}")
+
+    else:
+        print(f"Unknown action: {action}")
+        print("Available: install, uninstall, status")
+
+
+def cmd_blame(args):
+    """Show intent reasoning for git commits that touched a file"""
+    file_path = args.file
+    limit = getattr(args, 'limit', 20)
+
+    storage = IntentLogStorage()
+
+    try:
+        config = storage.load_config()
+    except ProjectNotFoundError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+    if not config.git_root:
+        print("Error: No git repository detected.")
+        print("Run 'ilog init' in a git repository first.")
+        sys.exit(1)
+
+    from ..git import get_git_log_for_file
+
+    git_root = Path(config.git_root)
+
+    # Get git log for the file
+    git_log = get_git_log_for_file(git_root, file_path, limit=limit)
+    if not git_log:
+        print(f"No git history found for '{file_path}'")
+        return
+
+    # Load all intents to match against git commits
+    try:
+        intents = storage.load_intents()
+    except BranchNotFoundError:
+        intents = []
+
+    # Build a lookup: git commit hash -> list of intents
+    commit_to_intents: dict = {}
+    for intent in intents:
+        git_ctx = intent.metadata.get("git_context", {})
+        commit = git_ctx.get("commit", "")
+        if commit:
+            commit_to_intents.setdefault(commit, []).append(intent)
+
+    print(f"Intent blame for '{file_path}':\n")
+    for entry in git_log:
+        commit_hash = entry["commit"]
+        short_hash = commit_hash[:12]
+        date = entry["date"][:10]
+        message = entry["message"]
+
+        # Find matching intents
+        matching = commit_to_intents.get(commit_hash, [])
+
+        print(f"[{short_hash}] {date} {message}")
+        if matching:
+            for intent in matching:
+                reasoning = intent.intent_reasoning
+                if len(reasoning) > 80:
+                    reasoning = reasoning[:77] + "..."
+                print(f"  Intent: {intent.intent_name}")
+                print(f"    {reasoning}")
+        else:
+            print(f"  (no intent recorded)")
+        print()
+
+
 def register_core_commands(subparsers):
     """Register core commands with the argument parser."""
     # init command
@@ -536,6 +856,8 @@ def register_core_commands(subparsers):
     log_parser.add_argument("--limit", "-n", type=int, default=10,
                             help="Number of intents to show (default: 10)")
     log_parser.add_argument("--branch", "-b", help="Show log for specific branch")
+    log_parser.add_argument("--git-commit", help="Filter by git commit hash (prefix match)")
+    log_parser.add_argument("--json", action="store_true", help="Output as JSON")
     log_parser.set_defaults(func=cmd_log)
 
     # search command
@@ -555,6 +877,7 @@ def register_core_commands(subparsers):
 
     # status command
     status_parser = subparsers.add_parser("status", help="Show project status")
+    status_parser.add_argument("--json", action="store_true", help="Output as JSON")
     status_parser.set_defaults(func=cmd_status)
 
     # diff command
@@ -577,3 +900,23 @@ def register_core_commands(subparsers):
     config_parser.add_argument("--embedding-provider", help="Provider for embeddings")
     config_parser.add_argument("--embedding-model", help="Embedding model name")
     config_parser.set_defaults(func=cmd_config)
+
+    # show command
+    show_parser = subparsers.add_parser("show", help="Show a single intent with full details")
+    show_parser.add_argument("intent_id", help="Intent ID or hash prefix")
+    show_parser.add_argument("--branch", "-b", help="Search in specific branch")
+    show_parser.add_argument("--json", action="store_true", help="Output as JSON")
+    show_parser.set_defaults(func=cmd_show)
+
+    # hooks command
+    hooks_parser = subparsers.add_parser("hooks", help="Manage git hooks")
+    hooks_parser.add_argument("action", choices=["install", "uninstall", "status"],
+                              help="Hook action")
+    hooks_parser.set_defaults(func=cmd_hooks)
+
+    # blame command
+    blame_parser = subparsers.add_parser("blame", help="Show intent reasoning for a file's git history")
+    blame_parser.add_argument("file", help="File path to blame")
+    blame_parser.add_argument("--limit", "-n", type=int, default=20,
+                              help="Number of git commits to show (default: 20)")
+    blame_parser.set_defaults(func=cmd_blame)
