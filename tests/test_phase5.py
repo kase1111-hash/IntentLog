@@ -7,6 +7,9 @@ Tests for:
 - Session tracking
 - Nested intent tracing
 """
+import pytest
+
+pytestmark = pytest.mark.context
 
 import pytest
 import asyncio

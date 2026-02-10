@@ -5,10 +5,8 @@ This package provides the modular CLI implementation for IntentLog.
 
 Modules:
 - core: Core commands (init, commit, branch, log, search, audit, status, diff, merge, config)
-- mp02: MP-02 Protocol commands (observe, segment, receipt, ledger, verify)
-- analytics: Analytics commands (export, analytics, metrics, sufficiency)
+- analytics: Analytics commands (export, analytics, metrics)
 - crypto: Cryptographic commands (keys, chain)
-- privacy: Privacy commands (privacy)
 - formalize: Formalization commands (formalize)
 - utils: Shared utilities
 """
@@ -40,10 +38,8 @@ def create_parser():
     # This allows the CLI to work even when optional packages (cryptography,
     # LLM providers, etc.) are not installed.
     _optional_commands = [
-        (".mp02", "register_mp02_commands"),
         (".analytics", "register_analytics_commands"),
         (".crypto", "register_crypto_commands"),
-        (".privacy", "register_privacy_commands"),
         (".formalize", "register_formalize_commands"),
         (".completion", "register_completion_commands"),
     ]

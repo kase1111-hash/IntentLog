@@ -5,6 +5,8 @@ Tests the ability to derive formal code, rules, and heuristics from prose intent
 """
 
 import pytest
+
+pytestmark = pytest.mark.llm
 from datetime import datetime
 from pathlib import Path
 

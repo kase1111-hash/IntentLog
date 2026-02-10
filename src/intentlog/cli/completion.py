@@ -16,10 +16,8 @@ _intentlog_completions() {
     _init_completion || return
 
     local commands="init commit log search branch status diff merge config audit
-                    observe segment receipt ledger verify
-                    export analytics metrics sufficiency
+                    export analytics metrics
                     keys chain
-                    privacy
                     formalize
                     backup completion"
 
@@ -105,18 +103,11 @@ _intentlog() {
         'merge:Merge branches'
         'config:Manage configuration'
         'audit:View audit log'
-        'observe:Start observation session'
-        'segment:Create time segment'
-        'receipt:Generate effort receipt'
-        'ledger:Manage receipt ledger'
-        'verify:Verify receipt'
         'export:Export intents'
         'analytics:View analytics'
         'metrics:Compute metrics'
-        'sufficiency:Test intent sufficiency'
         'keys:Manage signing keys'
         'chain:Verify chain integrity'
-        'privacy:Manage privacy settings'
         'formalize:Formalize intents'
         'backup:Backup and restore'
         'completion:Generate shell completion'
@@ -209,9 +200,8 @@ FISH_COMPLETION = '''# IntentLog fish completion
 # Save to ~/.config/fish/completions/intentlog.fish
 
 set -l commands init commit log search branch status diff merge config audit \\
-    observe segment receipt ledger verify \\
-    export analytics metrics sufficiency \\
-    keys chain privacy formalize backup completion
+    export analytics metrics \\
+    keys chain formalize backup completion
 
 # Disable file completion by default
 complete -c intentlog -f
@@ -228,18 +218,11 @@ complete -c intentlog -n "not __fish_seen_subcommand_from $commands" -a diff -d 
 complete -c intentlog -n "not __fish_seen_subcommand_from $commands" -a merge -d "Merge branches"
 complete -c intentlog -n "not __fish_seen_subcommand_from $commands" -a config -d "Manage config"
 complete -c intentlog -n "not __fish_seen_subcommand_from $commands" -a audit -d "View audit log"
-complete -c intentlog -n "not __fish_seen_subcommand_from $commands" -a observe -d "Start observation"
-complete -c intentlog -n "not __fish_seen_subcommand_from $commands" -a segment -d "Create segment"
-complete -c intentlog -n "not __fish_seen_subcommand_from $commands" -a receipt -d "Generate receipt"
-complete -c intentlog -n "not __fish_seen_subcommand_from $commands" -a ledger -d "Manage ledger"
-complete -c intentlog -n "not __fish_seen_subcommand_from $commands" -a verify -d "Verify receipt"
 complete -c intentlog -n "not __fish_seen_subcommand_from $commands" -a export -d "Export intents"
 complete -c intentlog -n "not __fish_seen_subcommand_from $commands" -a analytics -d "View analytics"
 complete -c intentlog -n "not __fish_seen_subcommand_from $commands" -a metrics -d "Compute metrics"
-complete -c intentlog -n "not __fish_seen_subcommand_from $commands" -a sufficiency -d "Test sufficiency"
 complete -c intentlog -n "not __fish_seen_subcommand_from $commands" -a keys -d "Manage keys"
 complete -c intentlog -n "not __fish_seen_subcommand_from $commands" -a chain -d "Verify chain"
-complete -c intentlog -n "not __fish_seen_subcommand_from $commands" -a privacy -d "Privacy settings"
 complete -c intentlog -n "not __fish_seen_subcommand_from $commands" -a formalize -d "Formalize intents"
 complete -c intentlog -n "not __fish_seen_subcommand_from $commands" -a backup -d "Backup/restore"
 complete -c intentlog -n "not __fish_seen_subcommand_from $commands" -a completion -d "Shell completion"

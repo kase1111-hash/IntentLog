@@ -1,7 +1,7 @@
 """
 Analytics and Metrics CLI commands for IntentLog.
 
-Commands: export, analytics, metrics, sufficiency
+Commands: export, analytics, metrics
 """
 
 import sys
@@ -12,7 +12,6 @@ from ..storage import IntentLogStorage, ProjectNotFoundError, BranchNotFoundErro
 from ..export import IntentExporter, ExportFilter, ExportFormat, AnonymizationConfig
 from ..analytics import IntentAnalytics, generate_summary
 from ..metrics import IntentMetrics
-from ..sufficiency import run_sufficiency_test
 from .utils import load_config_or_exit
 
 
@@ -286,57 +285,6 @@ def cmd_metrics(args):
         print("Available: all, density, info, auditability, fraud")
 
 
-def cmd_sufficiency(args):
-    """Run Intent Sufficiency Test"""
-    branch = getattr(args, 'branch', None)
-    author = getattr(args, 'author', None)
-    verbose = getattr(args, 'verbose', False)
-
-    storage = IntentLogStorage()
-
-    try:
-        config = storage.load_config()
-        branch = branch or config.current_branch
-        intents = storage.load_intents(branch)
-    except ProjectNotFoundError as e:
-        print(f"Error: {e}")
-        sys.exit(1)
-    except BranchNotFoundError as e:
-        print(f"Error: {e}")
-        sys.exit(1)
-
-    if not intents:
-        print(f"No intents on branch '{branch}'")
-        return
-
-    # Run sufficiency test
-    report = run_sufficiency_test(intents, expected_author=author)
-
-    print("="*60)
-    print("INTENT SUFFICIENCY TEST")
-    print("="*60)
-    print(f"\nResult: {'PASS' if report.passed else 'FAIL'}")
-    print(f"Score: {report.overall_score:.2f}/5.00")
-    print(f"Criteria passed: {report.criteria_passed}/{report.total_criteria}")
-
-    print("\nCriteria Results:")
-    for criterion, result in report.criteria.items():
-        status = "PASS" if result.passed else "FAIL"
-        symbol = "+" if result.passed else "x"
-        print(f"  {symbol} {criterion}: {result.score:.2f} - {status}")
-        if verbose and not result.passed:
-            for issue in result.issues:
-                print(f"      - {issue}")
-
-    if report.recommendations and verbose:
-        print("\nRecommendations:")
-        for rec in report.recommendations:
-            print(f"  - {rec}")
-
-    print("="*60)
-    sys.exit(0 if report.passed else 1)
-
-
 def register_analytics_commands(subparsers):
     """Register analytics commands with the argument parser."""
     # export command
@@ -376,10 +324,3 @@ def register_analytics_commands(subparsers):
     metrics_parser.add_argument("--branch", "-b", help="Analyze specific branch")
     metrics_parser.set_defaults(func=cmd_metrics)
 
-    # sufficiency command
-    sufficiency_parser = subparsers.add_parser("sufficiency", help="Run Intent Sufficiency Test")
-    sufficiency_parser.add_argument("--branch", "-b", help="Test specific branch")
-    sufficiency_parser.add_argument("--author", "-a", help="Expected author for attribution")
-    sufficiency_parser.add_argument("--verbose", "-v", action="store_true",
-                                    help="Show detailed issues and recommendations")
-    sufficiency_parser.set_defaults(func=cmd_sufficiency)

@@ -98,6 +98,12 @@ python_classes = ["Test*"]
 python_functions = ["test_*"]
 addopts = "-v --tb=short"
 asyncio_mode = "auto"
+markers = [
+    "analytics: Analytics, metrics, and export tests (deferred to v0.3)",
+    "context: Context management and decorator tests (deferred to v0.3)",
+    "llm: LLM provider and formalization tests (requires LLM configuration)",
+    "load: Load and stress tests (slow, requires storage)",
+]
 
 [tool.coverage.run]
 source = ["src/intentlog"]

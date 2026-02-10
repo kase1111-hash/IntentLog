@@ -20,7 +20,6 @@ from .provider import (
     AuthenticationError,
     ModelNotFoundError,
 )
-from ..ratelimit import get_llm_rate_limiter
 from ..logging import get_logger
 
 
@@ -105,13 +104,8 @@ class OpenAIProvider(LLMProvider):
             raise LLMError(f"Network error: {e.reason}")
 
     def _make_request(self, endpoint: str, data: Dict[str, Any]) -> Dict[str, Any]:
-        """Make HTTP request to OpenAI API with rate limiting and retry"""
-        rate_limiter = get_llm_rate_limiter()
-
-        return rate_limiter.execute(
-            lambda: self._make_request_internal(endpoint, data),
-            operation=f"openai_{endpoint}"
-        )
+        """Make HTTP request to OpenAI API"""
+        return self._make_request_internal(endpoint, data)
 
     def complete(self, prompt: str, system: Optional[str] = None) -> LLMResponse:
         """Generate completion using OpenAI chat API"""
