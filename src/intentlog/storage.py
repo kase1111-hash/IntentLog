@@ -125,15 +125,19 @@ class ProjectConfig:
     current_branch: str = "main"
     version: str = "0.1.0"
     llm: LLMSettings = field(default_factory=LLMSettings)
+    git_root: str = ""  # Path to git repo root, if detected
 
     def to_dict(self) -> Dict[str, Any]:
-        return {
+        d = {
             "project_name": self.project_name,
             "created_at": self.created_at,
             "current_branch": self.current_branch,
             "version": self.version,
             "llm": self.llm.to_dict(),
         }
+        if self.git_root:
+            d["git_root"] = self.git_root
+        return d
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "ProjectConfig":
@@ -144,6 +148,7 @@ class ProjectConfig:
             current_branch=data.get("current_branch", "main"),
             version=data.get("version", "0.1.0"),
             llm=LLMSettings.from_dict(llm_data) if llm_data else LLMSettings(),
+            git_root=data.get("git_root", ""),
         )
 
 
