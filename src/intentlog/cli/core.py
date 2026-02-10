@@ -275,6 +275,11 @@ def cmd_log(args):
             if parts:
                 print(f"  git: {' @ '.join(parts)}")
 
+        # Show tags if any
+        tags = intent.metadata.get("tags", [])
+        if tags:
+            print(f"  tags: {', '.join(tags)}")
+
         # Show attached files if any
         if intent.metadata.get("attached_files"):
             file_count = len(intent.metadata["attached_files"])
@@ -622,14 +627,8 @@ def cmd_config(args):
         print("Available: llm, show")
 
 
-def cmd_show(args):
-    """Show a single intent with full metadata"""
-    intent_id = args.intent_id
-    branch = getattr(args, 'branch', None)
-    json_output = getattr(args, 'json', False)
-
-    storage = IntentLogStorage()
-
+def _find_intent(storage, intent_id, branch=None):
+    """Find an intent by ID or hash prefix. Returns (intent, intents_list, branch) or exits."""
     try:
         config = storage.load_config()
         branch = branch or config.current_branch
@@ -641,19 +640,24 @@ def cmd_show(args):
         print(f"Error: {e}")
         sys.exit(1)
 
-    # Find intent by ID prefix or hash prefix
-    found = None
     for intent in intents:
         if intent.intent_id.startswith(intent_id):
-            found = intent
-            break
+            return intent, intents, branch
         if compute_intent_hash(intent).startswith(intent_id):
-            found = intent
-            break
+            return intent, intents, branch
 
-    if not found:
-        print(f"Error: No intent matching '{intent_id}' on branch '{branch}'")
-        sys.exit(1)
+    print(f"Error: No intent matching '{intent_id}' on branch '{branch}'")
+    sys.exit(1)
+
+
+def cmd_show(args):
+    """Show a single intent with full metadata"""
+    intent_id = args.intent_id
+    branch = getattr(args, 'branch', None)
+    json_output = getattr(args, 'json', False)
+
+    storage = IntentLogStorage()
+    found, intents, branch = _find_intent(storage, intent_id, branch)
 
     if json_output:
         entry = found.to_dict()
@@ -693,9 +697,21 @@ def cmd_show(args):
         for fpath, fhash in list(attached.items())[:20]:
             print(f"  {fhash} {fpath}")
 
+    # Tags
+    tags = found.metadata.get("tags", [])
+    if tags:
+        print(f"\nTags: {', '.join(tags)}")
+
+    # Links
+    links = found.metadata.get("links", [])
+    if links:
+        print(f"\nLinked intents:")
+        for link_id in links:
+            print(f"  -> {link_id[:12]}")
+
     # Other metadata (exclude keys we already displayed)
-    other_meta = {k: v for k, v in found.metadata.items()
-                  if k not in ("git_context", "attached_files")}
+    _displayed = ("git_context", "attached_files", "tags", "links")
+    other_meta = {k: v for k, v in found.metadata.items() if k not in _displayed}
     if other_meta:
         print(f"\nMetadata:")
         for k, v in other_meta.items():
@@ -827,6 +843,69 @@ def cmd_blame(args):
         print()
 
 
+def cmd_tag(args):
+    """Add or remove tags on an intent"""
+    intent_id = args.intent_id
+    tags = args.tags
+    remove = getattr(args, 'remove', False)
+    branch = getattr(args, 'branch', None)
+
+    storage = IntentLogStorage()
+    found, intents, branch = _find_intent(storage, intent_id, branch)
+
+    # Initialize tags list in metadata
+    current_tags = found.metadata.get("tags", [])
+
+    if remove:
+        for tag in tags:
+            if tag in current_tags:
+                current_tags.remove(tag)
+                print(f"  Removed tag: {tag}")
+            else:
+                print(f"  Tag not found: {tag}")
+    else:
+        for tag in tags:
+            if tag not in current_tags:
+                current_tags.append(tag)
+                print(f"  Added tag: {tag}")
+            else:
+                print(f"  Already tagged: {tag}")
+
+    found.metadata["tags"] = current_tags
+    storage.save_intents(intents, branch)
+
+    intent_hash = compute_intent_hash(found)
+    print(f"[{intent_hash}] tags: {', '.join(current_tags) if current_tags else '(none)'}")
+
+
+def cmd_link(args):
+    """Link two intents together"""
+    source_id = args.source
+    target_id = args.target
+    branch = getattr(args, 'branch', None)
+
+    storage = IntentLogStorage()
+    source, intents, branch = _find_intent(storage, source_id, branch)
+    target, _, _ = _find_intent(storage, target_id, branch)
+
+    # Add link to source intent's metadata
+    links = source.metadata.get("links", [])
+    target_ref = target.intent_id
+
+    if target_ref in links:
+        print(f"Already linked: {source.intent_id[:12]} -> {target.intent_id[:12]}")
+        return
+
+    links.append(target_ref)
+    source.metadata["links"] = links
+    storage.save_intents(intents, branch)
+
+    source_hash = compute_intent_hash(source)
+    target_hash = compute_intent_hash(target)
+    print(f"Linked [{source_hash}] {source.intent_name}")
+    print(f"    -> [{target_hash}] {target.intent_name}")
+
+
 def register_core_commands(subparsers):
     """Register core commands with the argument parser."""
     # init command
@@ -920,3 +999,18 @@ def register_core_commands(subparsers):
     blame_parser.add_argument("--limit", "-n", type=int, default=20,
                               help="Number of git commits to show (default: 20)")
     blame_parser.set_defaults(func=cmd_blame)
+
+    # tag command
+    tag_parser = subparsers.add_parser("tag", help="Add or remove tags on an intent")
+    tag_parser.add_argument("intent_id", help="Intent ID or hash prefix")
+    tag_parser.add_argument("tags", nargs="+", help="Tags to add or remove")
+    tag_parser.add_argument("--remove", "-r", action="store_true", help="Remove tags instead of adding")
+    tag_parser.add_argument("--branch", "-b", help="Branch to search")
+    tag_parser.set_defaults(func=cmd_tag)
+
+    # link command
+    link_parser = subparsers.add_parser("link", help="Link two related intents")
+    link_parser.add_argument("source", help="Source intent ID or hash prefix")
+    link_parser.add_argument("target", help="Target intent ID or hash prefix")
+    link_parser.add_argument("--branch", "-b", help="Branch to search")
+    link_parser.set_defaults(func=cmd_link)

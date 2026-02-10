@@ -535,3 +535,179 @@ class TestCLIGitIntegration:
         rc, out, _ = self._run_ilog("blame", "nonexistent.txt", cwd=git_repo)
         assert rc == 0
         assert "No git history" in out
+
+    # =====================================================================
+    # Tag command tests
+    # =====================================================================
+
+    def test_tag_add_single(self, ilog_in_git):
+        storage, git_repo = ilog_in_git
+        chained = storage.add_chained_intent(
+            name="Taggable intent", reasoning="Testing tag add",
+        )
+        prefix = chained.intent.intent_id[:8]
+
+        rc, out, _ = self._run_ilog("tag", prefix, "architecture", cwd=git_repo)
+        assert rc == 0
+        assert "Added tag: architecture" in out
+
+        # Verify persisted
+        intents = storage.load_intents()
+        assert "architecture" in intents[0].metadata.get("tags", [])
+
+    def test_tag_add_multiple(self, ilog_in_git):
+        storage, git_repo = ilog_in_git
+        chained = storage.add_chained_intent(
+            name="Multi-tag intent", reasoning="Testing multiple tags",
+        )
+        prefix = chained.intent.intent_id[:8]
+
+        rc, out, _ = self._run_ilog("tag", prefix, "design", "database", "v2", cwd=git_repo)
+        assert rc == 0
+        assert "Added tag: design" in out
+        assert "Added tag: database" in out
+        assert "Added tag: v2" in out
+
+        intents = storage.load_intents()
+        tags = intents[0].metadata.get("tags", [])
+        assert set(tags) == {"design", "database", "v2"}
+
+    def test_tag_add_duplicate_skipped(self, ilog_in_git):
+        storage, git_repo = ilog_in_git
+        chained = storage.add_chained_intent(
+            name="Dup tag intent", reasoning="Testing duplicate tags",
+            metadata={"tags": ["existing"]},
+        )
+        prefix = chained.intent.intent_id[:8]
+
+        rc, out, _ = self._run_ilog("tag", prefix, "existing", cwd=git_repo)
+        assert rc == 0
+        assert "Already tagged: existing" in out
+
+    def test_tag_remove(self, ilog_in_git):
+        storage, git_repo = ilog_in_git
+        chained = storage.add_chained_intent(
+            name="Remove tag intent", reasoning="Testing tag removal",
+            metadata={"tags": ["keep", "remove-me"]},
+        )
+        prefix = chained.intent.intent_id[:8]
+
+        rc, out, _ = self._run_ilog("tag", prefix, "remove-me", "--remove", cwd=git_repo)
+        assert rc == 0
+        assert "Removed tag: remove-me" in out
+
+        intents = storage.load_intents()
+        tags = intents[0].metadata.get("tags", [])
+        assert "keep" in tags
+        assert "remove-me" not in tags
+
+    def test_tag_remove_nonexistent(self, ilog_in_git):
+        storage, git_repo = ilog_in_git
+        chained = storage.add_chained_intent(
+            name="No such tag", reasoning="Testing removal of missing tag",
+        )
+        prefix = chained.intent.intent_id[:8]
+
+        rc, out, _ = self._run_ilog("tag", prefix, "nope", "--remove", cwd=git_repo)
+        assert rc == 0
+        assert "Tag not found: nope" in out
+
+    def test_tag_shows_in_log(self, ilog_in_git):
+        storage, git_repo = ilog_in_git
+        chained = storage.add_chained_intent(
+            name="Tagged in log", reasoning="Testing tag display in log",
+            metadata={"tags": ["visible-tag"]},
+        )
+
+        rc, out, _ = self._run_ilog("log", cwd=git_repo)
+        assert rc == 0
+        assert "visible-tag" in out
+
+    def test_tag_shows_in_show(self, ilog_in_git):
+        storage, git_repo = ilog_in_git
+        chained = storage.add_chained_intent(
+            name="Tagged in show", reasoning="Testing tag display in show",
+            metadata={"tags": ["show-tag", "another"]},
+        )
+        prefix = chained.intent.intent_id[:8]
+
+        rc, out, _ = self._run_ilog("show", prefix, cwd=git_repo)
+        assert rc == 0
+        assert "Tags:" in out
+        assert "show-tag" in out
+        assert "another" in out
+
+    def test_tag_nonexistent_intent(self, ilog_in_git):
+        _, git_repo = ilog_in_git
+        rc, out, _ = self._run_ilog("tag", "nonexistent99", "foo", cwd=git_repo)
+        assert rc != 0
+
+    # =====================================================================
+    # Link command tests
+    # =====================================================================
+
+    def test_link_two_intents(self, ilog_in_git):
+        storage, git_repo = ilog_in_git
+        c1 = storage.add_chained_intent(
+            name="Decision", reasoning="Chose PostgreSQL over MongoDB",
+        )
+        c2 = storage.add_chained_intent(
+            name="Exploration", reasoning="Tried MongoDB but it was too slow",
+        )
+        src = c1.intent.intent_id[:8]
+        tgt = c2.intent.intent_id[:8]
+
+        rc, out, _ = self._run_ilog("link", src, tgt, cwd=git_repo)
+        assert rc == 0
+        assert "Linked" in out
+        assert "Decision" in out
+        assert "Exploration" in out
+
+        # Verify persisted
+        intents = storage.load_intents()
+        source_intent = [i for i in intents if i.intent_id.startswith(src)][0]
+        links = source_intent.metadata.get("links", [])
+        assert c2.intent.intent_id in links
+
+    def test_link_duplicate_skipped(self, ilog_in_git):
+        storage, git_repo = ilog_in_git
+        c1 = storage.add_chained_intent(name="A", reasoning="First")
+        c2 = storage.add_chained_intent(name="B", reasoning="Second")
+        src = c1.intent.intent_id[:8]
+        tgt = c2.intent.intent_id[:8]
+
+        # Link once
+        self._run_ilog("link", src, tgt, cwd=git_repo)
+        # Link again
+        rc, out, _ = self._run_ilog("link", src, tgt, cwd=git_repo)
+        assert rc == 0
+        assert "Already linked" in out
+
+    def test_link_shows_in_show(self, ilog_in_git):
+        storage, git_repo = ilog_in_git
+        c1 = storage.add_chained_intent(name="Source", reasoning="Source intent")
+        c2 = storage.add_chained_intent(name="Target", reasoning="Target intent")
+
+        src = c1.intent.intent_id[:8]
+        tgt = c2.intent.intent_id[:8]
+        self._run_ilog("link", src, tgt, cwd=git_repo)
+
+        rc, out, _ = self._run_ilog("show", src, cwd=git_repo)
+        assert rc == 0
+        assert "Linked intents:" in out
+
+    def test_link_nonexistent_source(self, ilog_in_git):
+        storage, git_repo = ilog_in_git
+        c1 = storage.add_chained_intent(name="Exists", reasoning="Real intent")
+        tgt = c1.intent.intent_id[:8]
+
+        rc, out, _ = self._run_ilog("link", "nonexistent99", tgt, cwd=git_repo)
+        assert rc != 0
+
+    def test_link_nonexistent_target(self, ilog_in_git):
+        storage, git_repo = ilog_in_git
+        c1 = storage.add_chained_intent(name="Exists", reasoning="Real intent")
+        src = c1.intent.intent_id[:8]
+
+        rc, out, _ = self._run_ilog("link", src, "nonexistent99", cwd=git_repo)
+        assert rc != 0
