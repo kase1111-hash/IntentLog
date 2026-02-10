@@ -17,12 +17,6 @@ import argparse
 import sys
 
 from .core import register_core_commands
-from .mp02 import register_mp02_commands
-from .analytics import register_analytics_commands
-from .crypto import register_crypto_commands
-from .privacy import register_privacy_commands
-from .formalize import register_formalize_commands
-from .completion import register_completion_commands
 
 
 def create_parser():
@@ -39,14 +33,27 @@ def create_parser():
 
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
 
-    # Register all command groups
+    # Core commands always available
     register_core_commands(subparsers)
-    register_mp02_commands(subparsers)
-    register_analytics_commands(subparsers)
-    register_crypto_commands(subparsers)
-    register_privacy_commands(subparsers)
-    register_formalize_commands(subparsers)
-    register_completion_commands(subparsers)
+
+    # Optional command groups — register if their dependencies are available.
+    # This allows the CLI to work even when optional packages (cryptography,
+    # LLM providers, etc.) are not installed.
+    _optional_commands = [
+        (".mp02", "register_mp02_commands"),
+        (".analytics", "register_analytics_commands"),
+        (".crypto", "register_crypto_commands"),
+        (".privacy", "register_privacy_commands"),
+        (".formalize", "register_formalize_commands"),
+        (".completion", "register_completion_commands"),
+    ]
+    for module_name, func_name in _optional_commands:
+        try:
+            import importlib
+            mod = importlib.import_module(module_name, __name__)
+            getattr(mod, func_name)(subparsers)
+        except Exception:
+            pass  # Command group unavailable — skip silently
 
     return parser
 
@@ -67,11 +74,4 @@ def main():
 __all__ = [
     'main',
     'create_parser',
-    'register_core_commands',
-    'register_mp02_commands',
-    'register_analytics_commands',
-    'register_crypto_commands',
-    'register_privacy_commands',
-    'register_formalize_commands',
-    'register_completion_commands',
 ]

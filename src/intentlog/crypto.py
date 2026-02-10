@@ -28,7 +28,7 @@ try:
     )
     from cryptography.exceptions import InvalidSignature
     CRYPTO_AVAILABLE = True
-except ImportError:
+except BaseException:
     CRYPTO_AVAILABLE = False
     Ed25519PrivateKey = None
     Ed25519PublicKey = None
