@@ -52,7 +52,7 @@ class TestProjectConfig:
         config = ProjectConfig(project_name="my-project")
         assert config.project_name == "my-project"
         assert config.current_branch == "main"
-        assert config.version == "0.1.0"
+        assert config.version == "0.2.0"
 
     def test_config_to_dict(self):
         """Test serializing config to dict"""

@@ -7,6 +7,59 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [0.2.0] - 2026-02-10
+
+**"The One That Works"** — A focused refactor that cuts feature creep, adds git integration, and ships a working CLI.
+
+### Added
+
+#### Git Integration (Phase 3)
+- `src/intentlog/git.py` — New module for git detection, context capture, and hook management
+- `ilog init` now auto-detects git repos and stores `git_root` in config
+- `ilog commit` captures git branch, HEAD commit hash, and staged files as `metadata.git_context`
+- `ilog log --git-commit <hash>` filters intents by associated git commit
+- `ilog log --json` and `ilog status --json` for scripting
+- `ilog show <id>` displays a single intent with full metadata and git context
+- `ilog blame <file>` shows intent reasoning alongside git log entries
+- `ilog hooks install|uninstall|status` manages a `prepare-commit-msg` git hook
+- `ProjectConfig.git_root` field for persistent git repo association
+
+#### Developer Experience
+- `--json` flag on `log`, `status`, and `show` commands for machine-readable output
+- Pytest markers for selective test execution: `analytics`, `context`, `llm`, `load`
+- 46 new git integration tests (`tests/test_git_integration.py`)
+
+### Changed
+- Restructured `__init__.py` to lazy-load non-core modules via `__getattr__` — package now loads without `cryptography` installed
+- Fixed `except ImportError` → `except BaseException` for pyo3/Rust binding panics in crypto.py and test_phase2.py
+- Atomic file writes in storage.py (write-to-temp + `os.replace()`) for crash safety
+- CLI uses dynamic `importlib.import_module` registration for optional command groups
+- Version bumped to 0.2.0 across pyproject.toml, `__init__.py`, cli, and storage
+
+### Removed
+
+#### Deleted Modules (~8,600 LOC)
+- `src/intentlog/integrations/` (5 files) — Boundary Daemon, SIEM, LLM classifier, Memory Vault integrations (inverted dependency direction)
+- `src/intentlog/mp02/` (7 files) — MP-02 protocol (extracted to separate repo)
+- `src/intentlog/triggers.py` — Workflow orchestration (premature)
+- `src/intentlog/sufficiency.py` — Quality scoring (premature)
+- `src/intentlog/ratelimit.py` — Rate limiting (no users hitting limits)
+- `src/intentlog/privacy.py` — Full encryption/ACL system (premature)
+- `src/intentlog/cli/mp02.py`, `cli/privacy.py` — CLI for deleted modules
+- `tests/test_integrations.py`, `test_llm_classifier.py`, `test_mp02.py`, `test_triggers.py`, `test_privacy.py`
+
+#### Deleted Documentation
+- `AUDIT_REPORT.md`, `SECURITY_AUDIT.md` — Premature for alpha
+- `Memory-Vault-Integration.md`, `INTEGRATION.md` — References deleted code
+- `Your-Work-Isnt-Worthless.md` — Motivational content, not software docs
+- `mp-02-spec.md`, `docs/api/mp02.md`, `docs/api/privacy.md`, `docs/guide/integrations.md`, `docs/guide/mp02.md`
+
+### Fixed
+- `pyo3_runtime.PanicException` escaping `try/except` blocks — Python's `cryptography` library raises `BaseException` subclasses, not `Exception`
+- `validate_intent_name` import that referenced a non-existent function
+
+---
+
 ## [0.1.0-alpha] - 2026-01-02
 
 First alpha release with comprehensive production readiness improvements.
@@ -14,189 +67,38 @@ First alpha release with comprehensive production readiness improvements.
 ### Added
 
 #### Production Infrastructure
-- Backup and recovery module (`src/intentlog/backup.py`):
-  - Full project backups with gzip compression
-  - Backup metadata with SHA-256 checksums
-  - Restore operations with verification
-  - Retention policies for cleanup
-- Load testing suite (`tests/test_load.py`):
-  - Concurrent write/read stress tests
-  - File locking correctness verification
-  - Chain integrity under load
-  - Performance benchmarks with latency percentiles
-
-#### External Integrations
-- Boundary-Daemon integration (`src/intentlog/integrations/boundary_daemon.py`):
-  - Policy enforcement for intent operations
-  - Audit event emission
-  - Boundary mode awareness (OPEN → LOCKDOWN)
-  - Unix socket and HTTP endpoint support
-- Boundary-SIEM integration (`src/intentlog/integrations/boundary_siem.py`):
-  - CEF (Common Event Format) output
-  - LEEF (IBM QRadar) format support
-  - Async batched event delivery
-  - Compliance tagging (SOC 2, ISO 27001, NIST CSF)
+- Backup and recovery module (`src/intentlog/backup.py`)
+- Load testing suite (`tests/test_load.py`)
 
 #### Security & Validation
-- Security audit report (`SECURITY_AUDIT.md`)
-- Input validation module (`src/intentlog/validation.py`):
-  - Path traversal prevention
-  - Project/branch name validation
-- JSON schema validation (`src/intentlog/schema.py`):
-  - Config file validation
-  - Intents file validation
-  - Project health checks
+- Input validation module (`src/intentlog/validation.py`)
+- JSON schema validation (`src/intentlog/schema.py`)
 
 #### Developer Experience
-- CLI shell completion (`src/intentlog/cli/completion.py`):
-  - Bash completion
-  - Zsh completion
-  - Fish completion
-- Structured logging module (`src/intentlog/logging.py`):
-  - JSON and console output formats
-  - Context propagation
-  - Function decorators
-- LLM rate limiting module (`src/intentlog/ratelimit.py`):
-  - Token bucket rate limiting
-  - Exponential backoff retry
-  - Circuit breaker pattern
-
-#### Platform Support
-- Cross-platform file locking (`src/intentlog/filelock.py`):
-  - Unix (fcntl), Windows (msvcrt), fallback support
-- GitHub Actions test workflow (`.github/workflows/tests.yml`)
-- Python 3.12 support
+- CLI shell completion (bash, zsh, fish)
+- Structured logging module
+- Cross-platform file locking
 
 #### PyPI Publication
 - Updated pyproject.toml with URLs and keywords
-- py.typed marker for PEP 561 type hints
-- MANIFEST.in updates
-- Optional dependency groups (`crypto`, `openai`, `anthropic`, `llm`, `all`, `docs`, `benchmark`)
-- pytest-asyncio in dev dependencies
-- mypy and ruff configurations
-
-### Documentation
-- This CHANGELOG file
-- MkDocs-based API documentation with mkdocstrings:
-  - API reference for all modules (core, storage, cli, crypto, privacy, analytics, semantic, mp02)
-  - Getting started guides (installation, quickstart)
-  - User guides (concepts, CLI reference, MP-02 protocol)
-  - Material theme with dark mode support
-- Performance benchmarks:
-  - Core module benchmarks (Intent creation, serialization)
-  - Storage benchmarks (add/load/search intents)
-  - Merkle tree benchmarks (hash computation, tree building)
-  - Analytics benchmarks (latency/frequency stats, metrics)
-  - Export benchmarks (JSON, JSONL, CSV formats)
-  - Compatible with pytest-benchmark for CI integration
+- Optional dependency groups (`crypto`, `openai`, `anthropic`, `llm`, `all`, `docs`)
 
 ### Changed
-- Updated GitHub Actions from setup-python@v4 to setup-python@v5
-- Updated Anthropic provider default model to claude-sonnet-4-20250514
-- Refactored CLI from monolithic cli.py (2,185 LOC) into modular cli/ package:
-  - `cli/core.py` - Core commands (init, commit, branch, log, search, etc.)
-  - `cli/mp02.py` - MP-02 Protocol commands (observe, segment, receipt, ledger, verify)
-  - `cli/analytics.py` - Analytics commands (export, analytics, metrics, sufficiency)
-  - `cli/crypto.py` - Cryptographic commands (keys, chain)
-  - `cli/privacy.py` - Privacy commands (privacy)
-  - `cli/formalize.py` - Formalization commands (formalize)
-  - `cli/utils.py` - Shared utilities
-
-### Documentation
-- Comprehensive README.md update with all phases (1-9) and features
-- Updated CONTRIBUTING.md with current project structure and development workflow
-- Updated INTEGRATION.md with full CLI reference, LLM integration, context/decorator, triggers, and privacy controls
-- Enhanced docs/index.md with complete feature overview
-- Updated docs/api/index.md with all modules, usage examples, and exported symbols
-- Added context, decorator, and triggers documentation to API reference
+- Refactored CLI from monolithic cli.py into modular cli/ package
 
 ## [0.1.0] - 2025-01-01
 
 ### Added
-
-#### Phase 1: Core CLI
-- `ilog init` - Initialize IntentLog repository
-- `ilog commit` - Record intent with prose description
-- `ilog log` - View intent history
-- `ilog search` - Search intents by content
-- `ilog branch` - Branch management
-- `ilog status` - Show project status
-- Persistent storage with JSON serialization
-
-#### Phase 2: Cryptographic Integrity
+- Core CLI: `ilog init`, `commit`, `log`, `search`, `branch`, `status`
 - Merkle tree chain linking with SHA-256
 - Ed25519 signature support
-- `ilog keys generate` - Generate signing keypairs
-- `ilog keys sign` - Sign intents
-- `ilog chain verify` - Verify chain integrity
-- Inclusion proofs for individual intents
-
-#### Phase 3: MP-02 Protocol
-- Observer system for raw signal capture
-- Temporal segmentation based on time windows
-- Receipt generation with LLM validation
-- Append-only ledger for tamper-evidence
-- `ilog observe` - Start observation session
-- `ilog segment` - Create time-based segments
-- `ilog receipt` - Generate effort receipts
-- `ilog ledger` - Manage receipt ledger
-
-#### Phase 4: Analytics & Metrics
-- Intent analytics: latency, frequency, trends, bottlenecks
-- Doctrine metrics: Intent Density, Information Density, Auditability
-- `ilog analytics` - View intent analytics
-- `ilog metrics` - Compute doctrine metrics
-- `ilog export` - Export in JSON, JSONL, CSV, HuggingFace, OpenAI formats
-- `ilog sufficiency` - Test intent quality
-
-#### Phase 5: Context & Decorator
-- `@intent_logger` decorator for automatic logging
-- Intent context propagation across function calls
-- Session management for grouping related intents
-- Context hooks (on_enter, on_exit)
-- Environment variable propagation for subprocesses
-- Full tracing with trace IDs and span IDs
-
-#### Phase 6: Privacy Controls (MP-02 Section 12)
-- Fernet symmetric encryption for sensitive content
-- Privacy levels: PUBLIC, INTERNAL, CONFIDENTIAL, SECRET, TOP_SECRET
-- Access control policies with granular permissions
-- Revocation mechanism for future observation blocking
-- `ilog privacy status` - View privacy status
-- `ilog privacy revoke` - Revoke observation consent
-- `ilog privacy encrypt` - Encrypt sensitive intents
-- `ilog privacy keys` - Manage encryption keys
-
-#### Phase 8: Deferred Formalization
-- Derive code, rules, heuristics, schemas from prose intent
-- LLM-powered formalization with provenance tracking
-- Multiple output types: code, rules, heuristics, schema, config, spec, tests
-- `ilog formalize` - Formalize intents into structured outputs
-
-#### Phase 9: Human-in-the-Loop Triggers
-- Trigger types: notification, confirmation, approval, review
-- Sensitivity levels: low, medium, high, critical
-- Console and callback-based handlers
-- Timeout and escalation support
-- Audit trail integration
-
-#### LLM Integration
-- Pluggable LLM provider architecture
-- OpenAI provider (GPT-4, embeddings)
-- Anthropic Claude provider (completions)
-- Ollama provider (local models)
-- Mock provider for testing
-- Semantic diff between branches
-- Semantic search with embeddings
-
-#### Security
-- Zero production dependencies
-- Optional cryptography for signing/encryption
-- Input validation and sanitization
-- Secure key management
-
-### Fixed
-- Low-severity security issues identified in security audit
+- MP-02 Protocol implementation
+- Analytics, metrics, and export
+- Context management and `@intent_logger` decorator
+- Privacy controls with Fernet encryption
+- Deferred formalization with LLM
+- Human-in-the-loop triggers
+- Pluggable LLM providers (OpenAI, Anthropic, Ollama)
 
 ## [0.0.1] - Initial Development
 
@@ -204,4 +106,3 @@ First alpha release with comprehensive production readiness improvements.
 - Initial project structure
 - Core data models (Intent, IntentLog)
 - Basic documentation (README, Doctrine of Intent)
-- MP-02 protocol specification

@@ -4,8 +4,8 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "intentlog"
-version = "0.1.0"
-description = "Version control system for human reasoning and intent"
+version = "0.2.0"
+description = "Version control for human reasoning — track the 'why' alongside your git commits"
 readme = "README.md"
 requires-python = ">=3.8"
 license = {text = "CC BY-SA 4.0"}
@@ -16,10 +16,10 @@ keywords = [
     "version-control",
     "reasoning",
     "intent",
-    "merkle-tree",
-    "cryptographic-signatures",
-    "audit-trail",
     "decision-tracking",
+    "git",
+    "audit-trail",
+    "documentation",
 ]
 classifiers = [
     "Development Status :: 3 - Alpha",
@@ -76,11 +76,6 @@ docs = [
     "mkdocs-material>=9.0.0",
     "mkdocstrings[python]>=0.24.0",
 ]
-benchmark = [
-    "pytest>=7.4.0",
-    "pytest-benchmark>=4.0.0",
-]
-
 [project.scripts]
 intentlog = "intentlog.cli:main"
 ilog = "intentlog.cli:main"
