@@ -11,8 +11,7 @@ Before seeking support, please check the available documentation:
 - **[Quick Start Tutorial](docs/getting-started/quickstart.md)** - Getting started with IntentLog
 - **[CLI Reference](docs/guide/cli.md)** - Complete command-line interface documentation
 - **[API Reference](docs/api/index.md)** - Python API documentation
-- **[MP-02 Protocol](docs/guide/mp02.md)** - Protocol specification guide
-- **[Integration Guide](INTEGRATION.md)** - Third-party integrations
+- **[Core Concepts](docs/guide/concepts.md)** - Doctrine of Intent and key concepts
 
 ## Getting Help
 
@@ -72,7 +71,7 @@ export ANTHROPIC_API_KEY="your-anthropic-key"
 
 # Or use local models with Ollama
 ollama pull llama2
-ilog config --llm-provider ollama
+ilog config llm --provider ollama --model llama2
 ```
 
 ## Security Issues
@@ -92,14 +91,14 @@ Interested in contributing? See our [Contributing Guide](CONTRIBUTING.md) for:
 
 ## Project Status
 
-IntentLog is currently in **alpha** (v0.1.0). While functional, the API may change before the 1.0 release. We welcome feedback on the current design and implementation.
+IntentLog is currently in **alpha** (v0.2.0). While functional, the API may change before the 1.0 release. We welcome feedback on the current design and implementation.
 
 ### Version Support
 
 | Version | Status | Support Level |
 |---------|--------|---------------|
-| 0.1.x   | Alpha  | Active development, bug fixes |
-| < 0.1   | Legacy | No support |
+| 0.2.x   | Alpha  | Active development, bug fixes |
+| 0.1.x   | Legacy | No support |
 
 ## Community
 

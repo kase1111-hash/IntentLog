@@ -17,7 +17,7 @@ IntentLog has zero required dependencies by design. Optional features require ad
 
 ### Cryptographic Features
 
-For Ed25519 signing and Fernet encryption:
+For Ed25519 signing and Merkle chain verification:
 
 ```bash
 pip install intentlog[crypto]
@@ -25,13 +25,19 @@ pip install intentlog[crypto]
 
 ### LLM Integration
 
-For OpenAI-powered semantic features:
+For all LLM-powered semantic features (OpenAI and Anthropic):
+
+```bash
+pip install intentlog[llm]
+```
+
+For OpenAI only:
 
 ```bash
 pip install intentlog[openai]
 ```
 
-For Anthropic Claude:
+For Anthropic Claude only:
 
 ```bash
 pip install intentlog[anthropic]
@@ -61,7 +67,7 @@ Verify installation:
 
 ```bash
 ilog --version
-# intentlog 0.1.0
+# intentlog 0.2.0
 ```
 
 ## Next Steps

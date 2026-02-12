@@ -9,16 +9,15 @@ This section provides detailed API documentation for all IntentLog modules.
 | Module | Description |
 |--------|-------------|
 | [`intentlog.core`](core.md) | Core data models (Intent, IntentLog) |
-| [`intentlog.storage`](storage.md) | Persistent storage with Merkle chains |
+| [`intentlog.storage`](storage.md) | Persistent storage with atomic writes and branch management |
+| [`intentlog.git`](#git-integration) | Git detection, context capture, hook management |
 | [`intentlog.merkle`](storage.md#chainedintent) | Merkle tree chain linking |
-| [`intentlog.cli`](cli.md) | Command-line interface (modular) |
 
 ### Cryptographic Modules
 
 | Module | Description |
 |--------|-------------|
 | [`intentlog.crypto`](crypto.md) | Ed25519 signing and key management |
-| [`intentlog.privacy`](privacy.md) | MP-02 Section 12 encryption and revocation |
 
 ### Analytics Modules
 
@@ -27,7 +26,6 @@ This section provides detailed API documentation for all IntentLog modules.
 | [`intentlog.analytics`](analytics.md) | Intent analytics and statistics |
 | [`intentlog.metrics`](analytics.md#intentmetrics) | Doctrine metrics computation |
 | [`intentlog.export`](analytics.md#intentexporter) | Multi-format export |
-| [`intentlog.sufficiency`](analytics.md#sufficiencytest) | Intent quality testing |
 
 ### Context & Tracing Modules
 
@@ -35,7 +33,6 @@ This section provides detailed API documentation for all IntentLog modules.
 |--------|-------------|
 | `intentlog.context` | Intent context propagation and session management |
 | `intentlog.decorator` | `@intent_logger` decorator for automatic tracing |
-| `intentlog.triggers` | Human-in-the-loop trigger system |
 
 ### Semantic Modules
 
@@ -48,24 +45,16 @@ This section provides detailed API documentation for all IntentLog modules.
 | `intentlog.llm.ollama` | Ollama local models provider |
 | `intentlog.llm.registry` | Provider registration and discovery |
 
-### MP-02 Protocol Modules
+### Infrastructure Modules
 
 | Module | Description |
 |--------|-------------|
-| [`intentlog.mp02`](mp02.md) | MP-02 effort receipt protocol |
-| `intentlog.mp02.signal` | Raw signal definitions |
-| `intentlog.mp02.observer` | Signal capture |
-| `intentlog.mp02.segmentation` | Temporal grouping |
-| `intentlog.mp02.validator` | LLM-assisted validation |
-| `intentlog.mp02.receipt` | Receipt generation |
-| `intentlog.mp02.ledger` | Append-only ledger |
-
-### Integration Modules
-
-| Module | Description |
-|--------|-------------|
-| `intentlog.integrations.memory_vault` | Memory Vault integration |
-| `intentlog.integrations.llm_classifier` | LLM-powered classification |
+| `intentlog.audit` | Audit logging |
+| `intentlog.logging` | Structured logging |
+| `intentlog.validation` | Input validation and path sanitization |
+| `intentlog.filelock` | Cross-platform file locking |
+| `intentlog.schema` | JSON schema validation |
+| `intentlog.backup` | Backup and recovery |
 
 ## Installation
 
@@ -77,6 +66,7 @@ pip install intentlog[all]
 pip install intentlog[crypto]    # Cryptographic features
 pip install intentlog[openai]    # OpenAI LLM provider
 pip install intentlog[anthropic] # Anthropic LLM provider
+pip install intentlog[llm]       # All LLM providers
 ```
 
 ## Basic Usage
@@ -124,41 +114,6 @@ with session_scope("checkout_flow") as session:
     process_order("order-123")
 ```
 
-### Human-in-the-Loop Triggers
-
-```python
-from intentlog.triggers import (
-    requires_approval,
-    SensitivityLevel,
-    set_trigger_handler,
-    ConsoleTriggerHandler
-)
-
-set_trigger_handler(ConsoleTriggerHandler())
-
-@requires_approval(
-    operation="delete_data",
-    sensitivity=SensitivityLevel.CRITICAL
-)
-def delete_user_data(user_id: str):
-    # Will prompt for approval before executing
-    pass
-```
-
-### Privacy Controls
-
-```python
-from intentlog.privacy import PrivacyManager, PrivacyLevel
-
-privacy = PrivacyManager(project_path)
-
-# Encrypt intent
-encrypted = privacy.encrypt_intent(intent, level=PrivacyLevel.CONFIDENTIAL)
-
-# Revoke future observation
-privacy.revoke_future_observation(user_id="user-123", reason="Privacy request")
-```
-
 ### Semantic Features
 
 ```python
@@ -181,52 +136,40 @@ output = engine.formalize(
 
 ## Architecture
 
-IntentLog follows a modular architecture:
-
 ```
 intentlog/
 ├── core.py              # Data models
 ├── storage.py           # Persistence layer
+├── git.py               # Git integration
 ├── merkle.py            # Hash chain linking
 ├── crypto.py            # Cryptographic operations
-├── privacy.py           # Privacy controls
 ├── context.py           # Context propagation
 ├── decorator.py         # @intent_logger
-├── triggers.py          # Human-in-the-loop
 ├── analytics.py         # Analytics engine
 ├── metrics.py           # Doctrine metrics
 ├── export.py            # Multi-format export
-├── sufficiency.py       # Quality testing
 ├── semantic.py          # LLM integration
 ├── audit.py             # Audit logging
+├── logging.py           # Structured logging
+├── validation.py        # Input validation
+├── filelock.py          # File locking
+├── schema.py            # Schema validation
+├── backup.py            # Backup/recovery
 ├── cli/                 # CLI commands
 │   ├── core.py          # Core commands
-│   ├── mp02.py          # MP-02 commands
 │   ├── analytics.py     # Analytics commands
 │   ├── crypto.py        # Crypto commands
-│   ├── privacy.py       # Privacy commands
-│   └── formalize.py     # Formalization commands
-├── llm/                 # LLM providers
-│   ├── provider.py      # Abstract interface
-│   ├── openai.py        # OpenAI implementation
-│   ├── anthropic.py     # Anthropic implementation
-│   ├── ollama.py        # Ollama implementation
-│   └── registry.py      # Provider registry
-├── mp02/                # MP-02 protocol
-│   ├── signal.py        # Raw signals
-│   ├── observer.py      # Signal capture
-│   ├── segmentation.py  # Temporal grouping
-│   ├── validator.py     # LLM validation
-│   ├── receipt.py       # Effort receipts
-│   └── ledger.py        # Append-only ledger
-└── integrations/        # External integrations
-    ├── memory_vault.py  # Memory Vault
-    └── llm_classifier.py# Classification
+│   ├── formalize.py     # Formalization commands
+│   └── completion.py    # Shell completion
+└── llm/                 # LLM providers
+    ├── provider.py      # Abstract interface
+    ├── openai.py        # OpenAI implementation
+    ├── anthropic.py     # Anthropic implementation
+    ├── ollama.py        # Ollama implementation
+    └── registry.py      # Provider registry
 ```
 
-## Exported Symbols
-
-The package exports 328 symbols. Key exports include:
+## Key Exported Symbols
 
 ### Core
 - `Intent`, `IntentLog`
@@ -238,26 +181,19 @@ The package exports 328 symbols. Key exports include:
 - `generate_key_pair`, `sign_data`, `verify_signature`
 - `CRYPTO_AVAILABLE`
 
-### Privacy
-- `PrivacyManager`, `PrivacyLevel`, `AccessPolicy`
-- `IntentEncryptor`, `RevocationManager`
-- `ENCRYPTION_AVAILABLE`
-
 ### Analytics
 - `IntentAnalytics`, `IntentMetrics`
 - `IntentExporter`, `ExportFormat`
-- `SufficiencyTest`, `run_sufficiency_test`
 
 ### Context & Decorator
 - `IntentContext`, `IntentContextManager`
 - `session_scope`, `intent_scope`
 - `intent_logger`, `LogLevel`
 
-### Triggers
-- `TriggerType`, `SensitivityLevel`
-- `requires_approval`, `requires_confirmation`, `requires_review`
-- `ConsoleTriggerHandler`, `CallbackTriggerHandler`
-
 ### Semantic
 - `SemanticEngine`, `FormalizationType`, `FormalizedOutput`
 - `SemanticDiff`, `SemanticSearchResult`
+
+### Backup
+- `BackupManager`, `BackupMetadata`
+- `create_backup`, `restore_backup`, `list_backups`

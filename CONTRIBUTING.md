@@ -29,7 +29,6 @@ Thank you for your interest in contributing to IntentLog! This document provides
    pip install -e ".[openai]"      # OpenAI integration
    pip install -e ".[anthropic]"   # Anthropic integration
    pip install -e ".[docs]"        # Documentation tools
-   pip install -e ".[benchmark]"   # Performance testing
    ```
 
 3. **Run tests to verify setup**:
@@ -43,71 +42,64 @@ Thank you for your interest in contributing to IntentLog! This document provides
 IntentLog/
 ├── .github/
 │   └── workflows/              # GitHub Actions CI/CD
+│       ├── tests.yml           # Test execution on Python 3.8-3.12
 │       ├── docs.yml            # Documentation build
 │       └── intent_audit.yml    # Automated intent validation
-├── src/intentlog/              # Main package (~31,000 LOC)
-│   ├── __init__.py             # Package exports (328 symbols)
+├── src/intentlog/              # Main package
+│   ├── __init__.py             # Package exports with lazy loading
 │   ├── core.py                 # Core Intent/IntentLog classes
-│   ├── storage.py              # Persistent storage with Merkle chains
+│   ├── storage.py              # Persistent storage with atomic writes
+│   ├── git.py                  # Git detection, context capture, hooks
 │   ├── crypto.py               # Ed25519 signatures & key management
 │   ├── merkle.py               # Hash chain linking & verification
 │   ├── semantic.py             # LLM-powered semantic features
 │   ├── context.py              # Intent context management
 │   ├── decorator.py            # @intent_logger decorator
-│   ├── privacy.py              # Encryption & access control (MP-02 S12)
-│   ├── triggers.py             # Human-in-the-loop system
 │   ├── analytics.py            # Statistical analysis
 │   ├── metrics.py              # Doctrine metrics
 │   ├── export.py               # Multi-format export
-│   ├── sufficiency.py          # Intent quality testing
 │   ├── audit.py                # Audit logging
+│   ├── logging.py              # Structured logging
+│   ├── validation.py           # Input validation
+│   ├── filelock.py             # Cross-platform file locking
+│   ├── schema.py               # JSON schema validation
+│   ├── backup.py               # Backup and recovery
 │   ├── cli/                    # Modular CLI package
 │   │   ├── __init__.py         # CLI entry point
-│   │   ├── core.py             # Core commands (init, commit, branch, etc.)
-│   │   ├── mp02.py             # MP-02 Protocol commands
+│   │   ├── core.py             # Core commands (init, commit, log, show, blame, hooks, ...)
 │   │   ├── analytics.py        # Analytics commands
 │   │   ├── crypto.py           # Cryptographic commands
-│   │   ├── privacy.py          # Privacy commands
 │   │   ├── formalize.py        # Formalization commands
+│   │   ├── completion.py       # Shell completion
 │   │   └── utils.py            # Shared utilities
-│   ├── mp02/                   # MP-02 protocol implementation
-│   │   ├── __init__.py
-│   │   ├── signal.py           # Raw signal definitions
-│   │   ├── observer.py         # Signal capture
-│   │   ├── segmentation.py     # Temporal grouping
-│   │   ├── validator.py        # LLM-assisted validation
-│   │   ├── receipt.py          # Receipt generation
-│   │   └── ledger.py           # Append-only ledger
-│   ├── llm/                    # LLM provider plugins
-│   │   ├── __init__.py
-│   │   ├── provider.py         # Abstract interface
-│   │   ├── openai.py           # OpenAI provider
-│   │   ├── anthropic.py        # Anthropic provider
-│   │   ├── ollama.py           # Ollama provider
-│   │   └── registry.py         # Provider registration
-│   └── integrations/           # External integrations
-│       ├── __init__.py
-│       ├── memory_vault.py     # Memory Vault integration
-│       └── llm_classifier.py   # LLM-powered classification
-├── tests/                      # Comprehensive test suite (15 files)
+│   └── llm/                    # Optional LLM providers
+│       ├── provider.py         # Abstract interface
+│       ├── openai.py           # OpenAI provider
+│       ├── anthropic.py        # Anthropic provider
+│       ├── ollama.py           # Ollama provider
+│       └── registry.py         # Provider registration
+├── tests/                      # Test suite (11 test files)
 │   ├── test_core.py            # Core functionality tests
 │   ├── test_storage.py         # Storage tests
 │   ├── test_phase2.py          # Crypto/Merkle tests
-│   ├── test_mp02.py            # MP-02 protocol tests
+│   ├── test_git_integration.py # Git integration tests
+│   ├── test_cli_integration.py # CLI command tests
 │   ├── test_phase4.py          # Analytics tests
 │   ├── test_phase5.py          # Context/decorator tests
-│   ├── test_privacy.py         # Privacy tests
-│   ├── test_triggers.py        # HITL trigger tests
 │   ├── test_formalization.py   # Formalization tests
 │   ├── test_llm.py             # LLM provider tests
-│   └── ...
+│   ├── test_load.py            # Load/stress tests
+│   └── test_audit.py           # Audit logging tests
 ├── docs/                       # MkDocs documentation
 │   ├── index.md
 │   ├── getting-started/
 │   ├── guide/
 │   └── api/
 ├── examples/                   # Usage examples
-│   └── basic_usage.py
+│   ├── basic_usage.py
+│   ├── git_integration.sh
+│   ├── quickstart.sh
+│   └── team_workflow.sh
 ├── scripts/                    # Utility scripts
 │   └── audit_intents.py
 ├── benchmarks/                 # Performance benchmarks
@@ -194,7 +186,6 @@ async def test_async_feature():
 - Update README.md for user-facing changes
 - Add docstrings to all new code
 - Update docs/ for feature documentation
-- Update INTEGRATION.md for integration changes
 - Create examples in `examples/` for major features
 - Update CHANGELOG.md for notable changes
 
@@ -243,7 +234,7 @@ async def test_async_feature():
 
 When adding new CLI commands:
 
-1. Determine which module the command belongs to (`cli/core.py`, `cli/mp02.py`, etc.)
+1. Determine which module the command belongs to (`cli/core.py`, `cli/analytics.py`, etc.)
 2. Follow the existing command pattern using argparse
 3. Add comprehensive help text
 4. Add integration tests in `tests/test_cli_integration.py`
@@ -259,26 +250,6 @@ When adding new LLM providers:
 4. Make dependencies optional
 5. Add tests in `tests/test_llm.py`
 
-### MP-02 Protocol Extensions
-
-When extending the MP-02 protocol:
-
-1. Review `mp-02-spec.md` for normative requirements
-2. Implement in appropriate `src/intentlog/mp02/` module
-3. Ensure backward compatibility
-4. Add comprehensive tests
-5. Update `docs/guide/mp02.md`
-
-### Integrations
-
-When adding integrations (like Memory Vault):
-
-1. Create module in `src/intentlog/integrations/`
-2. Make it optional (handle ImportError gracefully)
-3. Add tests in `tests/test_integrations.py`
-4. Document in `INTEGRATION.md`
-5. Add example usage in `examples/`
-
 ## Release Process
 
 (For maintainers)
@@ -286,8 +257,8 @@ When adding integrations (like Memory Vault):
 1. Update version in `pyproject.toml` and `src/intentlog/__init__.py`
 2. Update CHANGELOG.md
 3. Run full test suite across Python versions
-4. Create git tag: `git tag v0.1.0`
-5. Push tag: `git push origin v0.1.0`
+4. Create git tag: `git tag v0.2.0`
+5. Push tag: `git push origin v0.2.0`
 6. Create GitHub release
 7. Publish to PyPI (when ready)
 

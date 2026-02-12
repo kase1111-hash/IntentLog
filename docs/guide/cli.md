@@ -23,6 +23,8 @@ ilog init <project-name> [--force]
 |--------|-------------|
 | `--force, -f` | Reinitialize existing project |
 
+Auto-detects the git repository and stores `git_root` in the project config.
+
 ### commit
 
 Create an intent commit.
@@ -37,30 +39,34 @@ ilog commit <message> [options]
 | `--sign, -s` | Sign with default key |
 | `--key-password` | Password for encrypted key |
 
-### branch
-
-Manage branches.
-
-```bash
-ilog branch [name] [--list]
-```
-
-| Option | Description |
-|--------|-------------|
-| `--list, -l` | List all branches |
+Automatically captures git context (branch, HEAD hash, staged files) as `metadata.git_context`.
 
 ### log
 
 Show intent history.
 
 ```bash
-ilog log [--limit N] [--branch NAME]
+ilog log [--limit N] [--branch NAME] [--git-commit HASH] [--json]
 ```
 
 | Option | Description |
 |--------|-------------|
 | `--limit, -n` | Number of intents (default: 10) |
 | `--branch, -b` | Specific branch |
+| `--git-commit` | Filter by associated git commit hash |
+| `--json` | Output as JSON for scripting |
+
+### show
+
+Display a single intent with full metadata.
+
+```bash
+ilog show <id> [--json]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--json` | Output as JSON for scripting |
 
 ### search
 
@@ -78,11 +84,27 @@ ilog search <query> [options]
 
 ### status
 
-Show project status.
+Show project status with git info.
 
 ```bash
-ilog status
+ilog status [--json]
 ```
+
+| Option | Description |
+|--------|-------------|
+| `--json` | Output as JSON for scripting |
+
+### branch
+
+Manage branches.
+
+```bash
+ilog branch [name] [--list]
+```
+
+| Option | Description |
+|--------|-------------|
+| `--list, -l` | List all branches |
 
 ### diff
 
@@ -106,6 +128,28 @@ Merge branches.
 ilog merge <source> [--message MSG]
 ```
 
+### blame
+
+Show intent reasoning alongside git history for a file.
+
+```bash
+ilog blame <file>
+```
+
+Maps git log entries to associated intents, showing the reasoning behind each change.
+
+### hooks
+
+Manage git hooks for IntentLog.
+
+```bash
+ilog hooks <action>
+```
+
+Actions: `install`, `uninstall`, `status`
+
+Installs a `prepare-commit-msg` git hook that prompts for intent when committing.
+
 ### config
 
 Configure settings.
@@ -118,57 +162,29 @@ Settings:
 - `llm` - Configure LLM provider
 - `show` - Show current config
 
-## MP-02 Commands
+### audit
 
-### observe
-
-Manage observation sessions.
+Audit intent logs.
 
 ```bash
-ilog observe <action> [paths...]
+ilog audit
 ```
 
-Actions: `start`, `stop`, `status`
+### tag
 
-### segment
-
-Mark segment boundaries.
+Tag an intent.
 
 ```bash
-ilog segment <action> [text] [--category CAT]
+ilog tag <intent-id> <name>
 ```
 
-Actions: `mark`, `list`
+### link
 
-### receipt
-
-Manage effort receipts.
+Link an external resource to an intent.
 
 ```bash
-ilog receipt <action> [receipt-id]
+ilog link <intent-id> <url>
 ```
-
-Actions: `create`, `list`, `show`, `verify`
-
-### ledger
-
-Manage append-only ledger.
-
-```bash
-ilog ledger <action> [options]
-```
-
-Actions: `show`, `verify`, `export`, `stats`, `checkpoint`
-
-### verify
-
-Verify integrity.
-
-```bash
-ilog verify [target]
-```
-
-Targets: `all`, `ledger`, `receipts`, `<receipt-id>`
 
 ## Analytics Commands
 
@@ -209,14 +225,6 @@ ilog metrics [action] [--branch BRANCH]
 
 Actions: `all`, `density`, `info`, `auditability`, `fraud`
 
-### sufficiency
-
-Run Intent Sufficiency Test.
-
-```bash
-ilog sufficiency [--branch BRANCH] [--author AUTHOR] [--verbose]
-```
-
 ## Crypto Commands
 
 ### keys
@@ -250,30 +258,11 @@ Actions: `verify`, `migrate`, `status`, `proof`
 | `--branch, -b` | Target branch |
 | `--sequence, -s` | Sequence for proof |
 
-## Privacy Commands
-
-### privacy
-
-Manage privacy controls.
-
-```bash
-ilog privacy <action> [options]
-```
-
-Actions: `status`, `revoke`, `list`, `encrypt`, `keys`
-
-| Option | Description |
-|--------|-------------|
-| `--target, -t` | all, intent, session |
-| `--target-id` | ID to revoke |
-| `--reason, -r` | Revocation reason |
-| `--user-id, -u` | User performing action |
-
 ## Formalization Commands
 
 ### formalize
 
-Derive formal outputs from prose.
+Derive formal outputs from prose (requires LLM configuration).
 
 ```bash
 ilog formalize <action> [options]
@@ -288,3 +277,11 @@ Actions: `intent`, `chain`, `search`
 | `--intent-id, -i` | Target intent ID |
 | `--query, -q` | Search query |
 | `--output, -o` | Output file |
+
+## Shell Completion
+
+Generate shell completion scripts.
+
+```bash
+ilog completion [bash|zsh|fish]
+```

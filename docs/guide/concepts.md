@@ -52,7 +52,6 @@ Guarantees of authenticity:
 
 - Merkle tree integrity
 - Ed25519 signatures
-- Append-only ledger
 
 ## Prose Commits
 
@@ -68,6 +67,16 @@ Considered leaky bucket but needed burst handling."
 # Bad: Just describes what
 ilog commit "Added rate limiter"
 ```
+
+## Git Integration
+
+IntentLog's defining feature is deep git integration. Every intent automatically captures:
+
+- **Git branch name** at time of commit
+- **Git HEAD commit hash** for bidirectional linking
+- **Staged files list** so you know what code the reasoning applies to
+
+Use `ilog log --git-commit <hash>` to find intents linked to a specific git commit, or `ilog blame <file>` to see reasoning alongside git history.
 
 ## Chain Integrity
 
@@ -93,26 +102,6 @@ main:     Design ──> Implement ──> Review
 feature:      └──> Experiment ──> Iterate ──> (merge)
 ```
 
-## MP-02 Protocol
-
-The MP-02 protocol extends IntentLog with effort receipts:
-
-1. **Signals**: Raw observations (keystrokes, file changes)
-2. **Segments**: Time-grouped effort periods
-3. **Receipts**: Cryptographic proof of effort
-4. **Ledger**: Immutable record of all receipts
-
-See [MP-02 Protocol](mp02.md) for details.
-
-## Privacy Model
-
-IntentLog respects privacy via MP-02 Section 12:
-
-- **Encryption**: Sensitive content can be encrypted
-- **Access Control**: Granular permissions per intent
-- **Revocation**: Future observation can be blocked
-- **Immutability**: Past receipts remain unchanged
-
 ## LLM Integration
 
 Optional LLM features enhance IntentLog:
@@ -124,5 +113,4 @@ Optional LLM features enhance IntentLog:
 ## Next Steps
 
 - [CLI Reference](cli.md)
-- [MP-02 Protocol](mp02.md)
 - [API Reference](../api/index.md)
