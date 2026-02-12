@@ -6,7 +6,8 @@ The following versions of IntentLog are currently receiving security updates:
 
 | Version | Supported          |
 | ------- | ------------------ |
-| 0.1.x   | :white_check_mark: |
+| 0.2.x   | :white_check_mark: |
+| 0.1.x   | :x:                |
 | < 0.1   | :x:                |
 
 ## Reporting a Vulnerability
@@ -77,17 +78,6 @@ export OPENAI_API_KEY="your-key-here"
 export ANTHROPIC_API_KEY="your-key-here"
 ```
 
-### Privacy and Data Protection
-
-- Use appropriate privacy levels for sensitive intents
-- Encrypt confidential content before storage
-- Review access control policies regularly
-
-```bash
-# Encrypt sensitive intents
-ilog privacy encrypt --level CONFIDENTIAL
-```
-
 ## Known Security Considerations
 
 ### Current Limitations
@@ -96,20 +86,14 @@ ilog privacy encrypt --level CONFIDENTIAL
 2. **Memory Handling**: API keys are held in memory during runtime. Consider this for security-critical deployments.
 3. **Audit Logs**: Current audit logs do not have cryptographic integrity protection (planned for future release).
 
-### Security Audit
-
-A comprehensive security audit has been performed. See [SECURITY_AUDIT.md](SECURITY_AUDIT.md) for detailed findings and recommendations.
-
 ## Security Features
 
 IntentLog includes several security features:
 
 - **Ed25519 Digital Signatures**: Cryptographic signing of intents
 - **Merkle Tree Chain Linking**: Tamper-evident history with SHA-256
-- **Fernet Encryption**: AES-128-CBC encryption for sensitive content
-- **Privacy Levels**: Granular access control (PUBLIC to TOP_SECRET)
 - **Input Validation**: Protection against path traversal and injection attacks
-- **Rate Limiting**: Protection against abuse of LLM APIs
+- **Cross-Platform File Locking**: Safe concurrent access to intent storage
 
 ## Responsible Disclosure
 
@@ -128,4 +112,4 @@ For security-related inquiries:
 
 ---
 
-*This security policy is effective as of January 2026 and applies to IntentLog v0.1.0 and later.*
+*This security policy is effective as of February 2026 and applies to IntentLog v0.2.0 and later.*

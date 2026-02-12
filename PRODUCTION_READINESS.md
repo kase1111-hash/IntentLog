@@ -1,12 +1,12 @@
 # Production Readiness Assessment
 
-**Version**: 0.1.0 (Alpha)
-**Assessment Date**: January 2026
-**Status**: Alpha - Not Yet Production Ready
+**Version**: 0.2.0 (Alpha)
+**Assessment Date**: February 2026
+**Status**: Alpha - Approaching Beta
 
 ## Executive Summary
 
-IntentLog is a well-architected, comprehensive implementation of a version control system for human reasoning. The codebase demonstrates strong design principles, good code organization, and extensive feature coverage. However, as an alpha release, several areas need attention before production deployment.
+IntentLog is a well-architected implementation of a version control system for human reasoning. The v0.2.0 release focused on cutting feature creep, adding deep git integration, and shipping a working CLI. Several modules were removed to sharpen the project's scope (MP-02, privacy, integrations), while git context capture became a core feature.
 
 ## Code Quality Assessment
 
@@ -23,57 +23,50 @@ IntentLog is a well-architected, comprehensive implementation of a version contr
 
 ### Core Modules Review
 
-- **core.py** (~100 LOC): Clean Intent/IntentLog dataclasses with validation
-- **storage.py** (~850 LOC): Robust storage with file locking, branch management
-- **crypto.py** (~600 LOC): Ed25519 implementation with proper key management
-- **privacy.py** (~1030 LOC): Comprehensive MP-02 Section 12 compliance
-- **semantic.py** (~1150 LOC): Well-designed LLM integration with caching
+- **core.py**: Clean Intent/IntentLog dataclasses with validation
+- **storage.py**: Robust storage with file locking, atomic writes, branch management
+- **git.py**: Git detection, context capture, hook management
+- **crypto.py**: Ed25519 implementation with proper key management
 - **merkle.py**: Proper Merkle tree implementation for tamper-evidence
-
-### Integrations Review
-
-- **boundary_daemon.py** (~400 LOC): Policy enforcement and audit logging with Boundary-Daemon
-- **boundary_siem.py** (~500 LOC): CEF/LEEF/JSON event emission to Boundary-SIEM
-- **memory_vault.py**: Secure classified storage integration
-- **llm_classifier.py**: LLM-based intent classification
+- **semantic.py**: Well-designed LLM integration with caching
 
 ### CLI Review
 
 The CLI is well-structured with:
-- Modular command registration
+- Modular command registration via dynamic `importlib` loading
 - Consistent error handling with `sys.exit(1)` on failures
 - Clear help text for all commands
-- Support for all major operations
+- `--json` output for scripting on key commands
+- Git integration commands (show, blame, hooks)
 
 ---
 
 ## Production Readiness Gaps
 
-### Critical (Must Fix Before Production)
+### Completed (v0.1.0 → v0.2.0)
 
-| Issue | Impact | Recommendation | Status |
-|-------|--------|----------------|--------|
-| ~~No test suite execution in CI~~ | ~~Unknown test coverage~~ | ~~Add GitHub Actions test workflow~~ | Done |
-| ~~Missing Windows support~~ | ~~Limited to Unix/Linux~~ | ~~Replace `fcntl` with cross-platform locking~~ | Done |
-| ~~No rate limiting for LLM calls~~ | ~~Potential API abuse~~ | ~~Add rate limiting and retry logic~~ | Done |
+| Issue | Status |
+|-------|--------|
+| CI test execution (GitHub Actions) | Done |
+| Cross-platform file locking | Done |
+| Structured logging | Done |
+| Input validation and path sanitization | Done |
+| Backup and recovery | Done |
+| Load testing suite | Done |
+| CLI shell completion | Done |
+| JSON schema validation for config | Done |
+| Git integration (branch, HEAD, staged files) | Done |
+| `--json` output for scripting | Done |
+| Lazy loading for optional dependencies | Done |
+| Atomic file writes (crash safety) | Done |
 
-### High Priority
+### Medium Priority (Open)
 
-| Issue | Impact | Recommendation | Status |
-|-------|--------|----------------|--------|
-| ~~No logging framework~~ | ~~Difficult debugging~~ | ~~Add structured logging~~ | Done |
-| ~~Missing input validation~~ | ~~Security vulnerability~~ | ~~Add input sanitization for file paths~~ | Done |
-| ~~No backup/recovery mechanism~~ | ~~Data loss risk~~ | ~~Add backup commands and recovery procedures~~ | Done |
-| ~~Missing concurrent access tests~~ | ~~Potential race conditions~~ | ~~Add stress tests for file locking~~ | Done |
-
-### Medium Priority
-
-| Issue | Impact | Recommendation | Status |
-|-------|--------|----------------|--------|
-| ~~No CLI autocompletion~~ | ~~UX limitation~~ | ~~Add shell completion scripts~~ | Done |
-| **Missing progress indicators** | Poor UX for long ops | Add progress bars for LLM operations | Open |
-| ~~No config file validation~~ | ~~Silent failures~~ | ~~Add JSON schema validation for config~~ | Done |
-| **Limited error context** | Debugging difficulty | Add error codes and detailed messages | Open |
+| Issue | Impact | Recommendation |
+|-------|--------|----------------|
+| **Missing progress indicators** | Poor UX for long ops | Add progress bars for LLM operations |
+| **Limited error context** | Debugging difficulty | Add error codes and detailed messages |
+| **No Docker image** | Deployment limitation | Create Dockerfile |
 
 ### Low Priority (Nice to Have)
 
@@ -90,10 +83,10 @@ The CLI is well-structured with:
 ### Implemented Security Features
 
 - Ed25519 digital signatures for integrity
-- Fernet (AES-128-CBC) encryption for confidentiality
 - Private key encryption with password protection
 - Restrictive file permissions (`0o600`) for key files
-- Access control policies with revocation
+- Input validation and path traversal prevention
+- Cross-platform file locking for concurrent access
 
 ### Security Gaps
 
@@ -101,7 +94,6 @@ The CLI is well-structured with:
 |-----|----------|----------------|
 | **No secret scanning** | Medium | Scan for API keys in intent content |
 | **No audit log protection** | Medium | Make audit logs append-only |
-| **Missing rate limiting** | Medium | Prevent brute-force on encrypted keys |
 | **No secure deletion** | Low | Implement secure key file wiping |
 
 ---
@@ -113,6 +105,7 @@ The CLI is well-structured with:
 - Pure Python implementation with no native extensions
 - Embedding cache to minimize LLM API calls
 - File-based storage (suitable for small-medium projects)
+- Atomic writes via temp file + `os.replace()` for crash safety
 
 ### Recommendations
 
@@ -120,7 +113,6 @@ The CLI is well-structured with:
 |-------------|----------|-------|
 | **Database backend option** | High | SQLite/PostgreSQL for large projects |
 | **Async LLM calls** | Medium | Improve throughput for semantic operations |
-| **Lazy loading** | Medium | Defer loading of large intent histories |
 | **Index for search** | Medium | Full-text search index for large datasets |
 
 ---
@@ -129,17 +121,17 @@ The CLI is well-structured with:
 
 ### Current Test Coverage
 
-- 15 test files covering major functionality
-- Tests for core, storage, crypto, privacy, context, triggers
-- Integration tests for CLI
+- 11 test files covering major functionality
+- Tests for core, storage, crypto, git integration, CLI, context, analytics
+- Integration tests for CLI commands
+- Load and stress tests
 - Async test support with pytest-asyncio
+- CI runs on Python 3.8-3.12
 
 ### Testing Gaps
 
 | Gap | Priority | Notes |
 |-----|----------|-------|
-| **No CI/CD test execution** | Critical | Tests exist but not run in CI |
-| **Missing load tests** | High | Validate performance at scale |
 | **No fuzzing** | Medium | Test input edge cases |
 | **Missing mock LLM tests** | Medium | Test semantic features without API |
 
@@ -152,15 +144,16 @@ The CLI is well-structured with:
 - README.md with comprehensive overview
 - CONTRIBUTING.md with development guidelines
 - MkDocs API documentation
-- MP-02 specification (40KB detailed spec)
 - Doctrine of Intent philosophical framework
-- Integration guides
+- CLI reference with all commands
+- Quick start guide
+- Installation guide with all optional dependency groups
+- CHANGELOG.md with detailed version history
 
 ### Documentation Gaps
 
 | Gap | Priority | Notes |
 |-----|----------|-------|
-| **API changelog** | High | Track breaking changes |
 | **Migration guide** | High | For version upgrades |
 | **Troubleshooting guide** | Medium | Common issues and solutions |
 | **Performance tuning guide** | Medium | Configuration for large projects |
@@ -172,7 +165,7 @@ The CLI is well-structured with:
 ### Packaging
 
 - Modern pyproject.toml configuration
-- Optional dependency groups (`[crypto]`, `[openai]`, `[all]`)
+- Optional dependency groups (`[crypto]`, `[openai]`, `[anthropic]`, `[llm]`, `[all]`)
 - Entry points for CLI (`ilog`, `intentlog`)
 - Ready for PyPI publication
 
@@ -180,7 +173,7 @@ The CLI is well-structured with:
 
 ```
 Python: 3.8+ (tested 3.8-3.12)
-OS: Unix/Linux (Windows needs fcntl replacement)
+OS: Unix/Linux/macOS (Windows support via cross-platform file locking)
 Optional: cryptography, openai, anthropic packages
 ```
 
@@ -190,70 +183,31 @@ Optional: cryptography, openai, anthropic packages
 |------|----------|-------|
 | **PyPI publication** | High | Not yet published |
 | **Docker image** | Medium | For containerized deployment |
-| **Helm chart** | Low | For Kubernetes deployment |
-| **systemd service file** | Low | For daemon mode |
-
----
-
-## Roadmap to Production
-
-### Phase 1: Critical Fixes (Weeks 1-2)
-
-1. [x] Add GitHub Actions test workflow (`.github/workflows/tests.yml`)
-2. [x] Implement cross-platform file locking (`src/intentlog/filelock.py`)
-3. [x] Add LLM rate limiting and retry logic (`src/intentlog/ratelimit.py`)
-4. [x] Fix import error handling (`src/intentlog/__init__.py`)
-
-### Phase 2: Stability (Weeks 3-4)
-
-1. [x] Add structured logging (`src/intentlog/logging.py`)
-2. [x] Implement input validation (`src/intentlog/validation.py`)
-3. [x] Add backup/recovery commands (`src/intentlog/backup.py`)
-4. [x] Write load tests (`tests/test_load.py`)
-
-### Phase 3: Hardening (Weeks 5-6)
-
-1. [x] Security audit (`SECURITY_AUDIT.md`)
-2. [x] Boundary-Daemon integration (`src/intentlog/integrations/boundary_daemon.py`)
-3. [x] Boundary-SIEM integration (`src/intentlog/integrations/boundary_siem.py`)
-4. [x] Documentation updates (`docs/guide/integrations.md`)
-
-### Phase 4: Release (Weeks 7-8)
-
-1. [x] PyPI publication preparation (`pyproject.toml`, `MANIFEST.in`)
-2. [ ] Docker image creation
-3. [ ] Public beta announcement
-4. [ ] Community feedback collection
 
 ---
 
 ## Conclusion
 
-IntentLog demonstrates excellent design and comprehensive feature coverage for its stated purpose. The codebase is well-organized, follows Python best practices, and includes thoughtful handling of optional dependencies.
+IntentLog v0.2.0 represents a significant improvement in focus and reliability. The removal of premature features (MP-02, privacy, integrations) and the addition of git integration make the tool more practical and maintainable.
 
-**Current Status**: Beta Ready - suitable for beta testing and early production use
-**Production Readiness**: 90-95% - all critical and high priority items complete
+**Current Status**: Alpha, approaching beta readiness
+**Production Readiness**: ~85% — core functionality solid, needs PyPI publication and community testing
 
-**Completed Improvements**:
-1. ✅ CI/CD test execution (GitHub Actions)
-2. ✅ Cross-platform compatibility (Windows support)
-3. ✅ Structured logging
-4. ✅ LLM rate limiting and retry logic
-5. ✅ Input validation and path sanitization
-6. ✅ Security audit completed
-7. ✅ Backup and recovery mechanisms
-8. ✅ Load testing suite
-9. ✅ Boundary-Daemon integration (policy enforcement)
-10. ✅ Boundary-SIEM integration (security event logging)
-11. ✅ PyPI publication preparation
+**Key Strengths**:
+1. Zero-dependency core with clean optional dependency model
+2. Deep git integration (branch, HEAD, staged files capture)
+3. Cryptographic integrity (Merkle chains, Ed25519 signatures)
+4. Comprehensive test suite with CI across Python 3.8-3.12
+5. Atomic writes and crash safety
 
-**Remaining Items** (Medium Priority):
-1. Docker image creation
-2. CLI autocompletion
-3. Progress indicators for long operations
+**Remaining Items**:
+1. PyPI publication
+2. Docker image
+3. Progress indicators for LLM operations
+4. Community feedback and beta testing
 
-**Recommendation**: Ready for beta release and PyPI publication. Consider gathering community feedback before 1.0 release.
+**Recommendation**: Ready for beta release and PyPI publication.
 
 ---
 
-*This assessment was generated from code review on January 2026.*
+*This assessment was updated for v0.2.0, February 2026.*
