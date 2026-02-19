@@ -6,6 +6,7 @@ Supports both completion and embedding models.
 """
 
 import json
+import time as _time
 from typing import Optional, List, Dict, Any
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
@@ -17,7 +18,10 @@ from .provider import (
     EmbeddingResponse,
     LLMError,
     ModelNotFoundError,
+    check_outbound_content,
+    get_communication_monitor,
 )
+from ..logging import get_logger
 
 
 class OllamaProvider(LLMProvider):
@@ -41,18 +45,32 @@ class OllamaProvider(LLMProvider):
         return self.DEFAULT_MODEL
 
     def _get_base_url(self) -> str:
-        return self.config.base_url or self.DEFAULT_BASE_URL
+        url = self.config.base_url or self.DEFAULT_BASE_URL
+        # Warn if using unencrypted HTTP to non-local host
+        if url.startswith("http://"):
+            from urllib.parse import urlparse
+            hostname = urlparse(url).hostname or ""
+            if hostname not in ("localhost", "127.0.0.1", "::1"):
+                get_logger().warning(
+                    "Ollama using unencrypted HTTP to non-local host: %s", hostname
+                )
+        return url
 
     def _make_request(
         self, endpoint: str, data: Dict[str, Any], stream: bool = False
     ) -> Dict[str, Any]:
         """Make HTTP request to Ollama API"""
         url = f"{self._get_base_url()}/{endpoint}"
+        logger = get_logger()
+        monitor = get_communication_monitor()
+
+        encoded_body = json.dumps(data).encode("utf-8")
+        start = _time.perf_counter()
 
         try:
             request = Request(
                 url,
-                data=json.dumps(data).encode("utf-8"),
+                data=encoded_body,
                 headers={"Content-Type": "application/json"},
                 method="POST",
             )
@@ -66,7 +84,7 @@ class OllamaProvider(LLMProvider):
                         if "response" in chunk:
                             full_response += chunk["response"]
                         if chunk.get("done"):
-                            return {
+                            result = {
                                 "response": full_response,
                                 "model": chunk.get("model", data.get("model")),
                                 "done": True,
@@ -74,12 +92,41 @@ class OllamaProvider(LLMProvider):
                                 "eval_count": chunk.get("eval_count", 0),
                                 "prompt_eval_count": chunk.get("prompt_eval_count", 0),
                             }
+                            duration_ms = (_time.perf_counter() - start) * 1000
+                            logger.info(
+                                "Ollama API request",
+                                endpoint=endpoint, duration_ms=round(duration_ms, 1),
+                            )
+                            monitor.record_request(
+                                url, bytes_sent=len(encoded_body),
+                                status_code=200, duration_ms=duration_ms,
+                            )
+                            return result
                     return {"response": full_response, "model": data.get("model")}
                 else:
-                    return json.loads(response.read().decode("utf-8"))
+                    raw = response.read()
+                    duration_ms = (_time.perf_counter() - start) * 1000
+                    logger.info(
+                        "Ollama API request",
+                        endpoint=endpoint, status=response.status,
+                        duration_ms=round(duration_ms, 1),
+                    )
+                    anomaly = monitor.record_request(
+                        url, bytes_sent=len(encoded_body),
+                        bytes_received=len(raw),
+                        status_code=response.status, duration_ms=duration_ms,
+                    )
+                    if anomaly:
+                        logger.warning("Communication anomaly: %s", anomaly)
+                    return json.loads(raw.decode("utf-8"))
 
         except HTTPError as e:
+            duration_ms = (_time.perf_counter() - start) * 1000
             body = e.read().decode("utf-8") if e.fp else ""
+            monitor.record_request(
+                url, bytes_sent=len(encoded_body),
+                status_code=e.code, duration_ms=duration_ms,
+            )
             try:
                 error_data = json.loads(body)
                 error_msg = error_data.get("error", body)
@@ -102,6 +149,8 @@ class OllamaProvider(LLMProvider):
 
     def complete(self, prompt: str, system: Optional[str] = None) -> LLMResponse:
         """Generate completion using Ollama generate API"""
+        check_outbound_content(prompt, system)
+
         data = {
             "model": self.get_model(),
             "prompt": prompt,

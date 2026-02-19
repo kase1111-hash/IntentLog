@@ -30,6 +30,13 @@ def cmd_keys(args):
         name = getattr(args, 'name', 'default')
         password = getattr(args, 'password', None)
 
+        # If no password on CLI, prompt interactively when stdin is a tty
+        if password is None and sys.stdin.isatty():
+            import getpass
+            password = getpass.getpass("Key password (empty for no encryption): ")
+            if not password:
+                password = None
+
         try:
             key_pair = key_manager.generate_key(name=name, password=password)
             print(f"Generated key pair: {name}")

@@ -57,7 +57,7 @@ from .merkle import (
 CRYPTO_AVAILABLE = False
 try:
     from .crypto import CRYPTO_AVAILABLE
-except BaseException:
+except (ImportError, ModuleNotFoundError):
     pass
 
 # ---- Lazy loading for non-core modules ----

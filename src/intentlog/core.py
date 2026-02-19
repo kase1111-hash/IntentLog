@@ -21,6 +21,7 @@ class Intent:
     timestamp: datetime = field(default_factory=datetime.now)
     metadata: Dict[str, Any] = field(default_factory=dict)
     parent_intent_id: Optional[str] = None
+    trust_level: str = "unverified"  # "unverified", "signed", "verified"
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert intent to dictionary format"""
@@ -31,6 +32,7 @@ class Intent:
             "timestamp": self.timestamp.isoformat(),
             "metadata": self.metadata,
             "parent_intent_id": self.parent_intent_id,
+            "trust_level": self.trust_level,
         }
 
     def validate(self) -> bool:

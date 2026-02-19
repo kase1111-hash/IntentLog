@@ -19,6 +19,8 @@ from datetime import datetime
 from typing import Optional, Dict, Any, Tuple
 from dataclasses import dataclass
 
+from .validation import validate_key_name
+
 # Use cryptography library for Ed25519
 try:
     from cryptography.hazmat.primitives import serialization
@@ -382,10 +384,20 @@ class KeyManager:
             Generated KeyPair
         """
         check_crypto_available()
+        validate_key_name(name)
         self._ensure_keys_dir()
 
         # Generate key pair
         key_pair = generate_key_pair()
+
+        if password is None:
+            import warnings
+            warnings.warn(
+                "Private key stored without encryption. "
+                "Use password parameter for production keys.",
+                UserWarning,
+                stacklevel=2,
+            )
 
         # Save private key
         private_pem = serialize_private_key(key_pair.private_key, password)
@@ -434,6 +446,7 @@ class KeyManager:
             KeyNotFoundError: If key doesn't exist
         """
         check_crypto_available()
+        validate_key_name(name)
 
         private_path = self.keys_dir / f"{name}.key"
         public_path = self.keys_dir / f"{name}.pub"
@@ -444,6 +457,23 @@ class KeyManager:
         # Load metadata
         metadata = self._load_metadata()
         key_meta = metadata.get("keys", {}).get(name, {})
+
+        # Check key age and warn if old
+        created_at = key_meta.get("created_at", "")
+        if created_at:
+            try:
+                key_date = datetime.fromisoformat(created_at)
+                age_days = (datetime.now() - key_date).days
+                if age_days > 365:
+                    import warnings
+                    warnings.warn(
+                        f"Key '{name}' is {age_days} days old. "
+                        "Consider rotating keys periodically for security.",
+                        UserWarning,
+                        stacklevel=2,
+                    )
+            except (ValueError, TypeError):
+                pass
 
         # Load keys
         with open(private_path, "rb") as f:
@@ -473,6 +503,7 @@ class KeyManager:
             KeyNotFoundError: If key doesn't exist
         """
         check_crypto_available()
+        validate_key_name(name)
 
         public_path = self.keys_dir / f"{name}.pub"
 
@@ -520,6 +551,7 @@ class KeyManager:
         Returns:
             PEM-encoded public key string
         """
+        validate_key_name(name)
         public_path = self.keys_dir / f"{name}.pub"
 
         if not public_path.exists():

@@ -132,6 +132,8 @@ class BackupManager:
             self.backup_dir = Path.home() / ".intentlog" / "backups"
 
         self.backup_dir.mkdir(parents=True, exist_ok=True)
+        # Restrict permissions to owner only
+        os.chmod(self.backup_dir, 0o700)
 
     def _generate_backup_id(self) -> str:
         """Generate a unique backup ID."""
@@ -369,6 +371,51 @@ class BackupManager:
 
         return is_valid, issues
 
+    @staticmethod
+    def _safe_extract_member(
+        tar: tarfile.TarFile,
+        member: tarfile.TarInfo,
+        target_path: Path,
+    ) -> None:
+        """
+        Safely extract a tar member with path traversal protection.
+
+        Prevents Zip Slip attacks by validating that the resolved
+        extraction path stays within the target directory.
+
+        Raises:
+            RestoreError: If the member path escapes target_path or is unsafe
+        """
+        # Reject absolute paths
+        if member.name.startswith("/") or member.name.startswith("\\"):
+            raise RestoreError(
+                f"Refusing to extract member with absolute path: {member.name}"
+            )
+
+        # Reject path traversal components
+        if ".." in member.name.split("/"):
+            raise RestoreError(
+                f"Refusing to extract member with path traversal: {member.name}"
+            )
+
+        # Reject symlinks and hardlinks (could point outside target)
+        if member.issym() or member.islnk():
+            raise RestoreError(
+                f"Refusing to extract symlink/hardlink: {member.name}"
+            )
+
+        # Resolve the final extraction path and ensure it stays within target
+        extracted_path = (target_path / member.name).resolve()
+        target_resolved = target_path.resolve()
+        try:
+            extracted_path.relative_to(target_resolved)
+        except ValueError:
+            raise RestoreError(
+                f"Member path escapes target directory: {member.name}"
+            )
+
+        tar.extract(member, target_path)
+
     def _find_backup_file(self, backup_id: str) -> Optional[Path]:
         """Find the backup archive file for a given backup ID."""
         patterns = [
@@ -456,11 +503,11 @@ class BackupManager:
 
                 mode = "r:gz" if metadata.compression == "gzip" else "r"
                 with tarfile.open(backup_path, mode) as tar:
-                    # Extract all files except metadata
+                    # Extract all files except metadata, with path traversal protection
                     for member in tar.getmembers():
                         if member.name == "backup_metadata.json":
                             continue
-                        tar.extract(member, target_path)
+                        self._safe_extract_member(tar, member, target_path)
 
                 if progress_callback:
                     progress_callback("Verifying restored data...", 0.8)
@@ -504,16 +551,25 @@ class BackupManager:
                 logger.error(f"Restore failed: {e}")
                 raise RestoreError(f"Failed to restore backup: {e}")
 
-    def delete_backup(self, backup_id: str) -> bool:
+    def delete_backup(self, backup_id: str, confirm: bool = False) -> bool:
         """
         Delete a backup and its metadata.
 
         Args:
             backup_id: The backup to delete
+            confirm: Must be True to confirm deletion
 
         Returns:
             True if deleted, False if not found
+
+        Raises:
+            BackupError: If confirm is not True
         """
+        if not confirm:
+            raise BackupError(
+                "Destructive operation: pass confirm=True to delete backups"
+            )
+
         logger = get_logger()
 
         backup_path = self._find_backup_file(backup_id)
@@ -554,7 +610,7 @@ class BackupManager:
         # Apply count-based retention
         if keep_count > 0 and len(backups) > keep_count:
             for backup in backups[keep_count:]:
-                if self.delete_backup(backup.backup_id):
+                if self.delete_backup(backup.backup_id, confirm=True):
                     deleted.append(backup.backup_id)
 
         # Apply time-based retention
@@ -565,7 +621,7 @@ class BackupManager:
             for backup in self.list_backups():
                 backup_time = datetime.fromisoformat(backup.created_at.rstrip("Z"))
                 if backup_time < cutoff:
-                    if self.delete_backup(backup.backup_id):
+                    if self.delete_backup(backup.backup_id, confirm=True):
                         deleted.append(backup.backup_id)
 
         if deleted:

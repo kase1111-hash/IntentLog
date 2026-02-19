@@ -298,6 +298,13 @@ class IntentExporter:
 
         # Write to file if path provided
         if output_path:
+            # Safety check: prevent writing to system directories
+            from pathlib import Path as _Path
+            resolved = _Path(output_path).resolve()
+            _blocked_prefixes = ("/etc", "/usr", "/bin", "/sbin", "/boot", "/proc", "/sys")
+            for prefix in _blocked_prefixes:
+                if str(resolved).startswith(prefix):
+                    raise ValueError(f"Refusing to write to system directory: {prefix}")
             with open(output_path, "w", encoding="utf-8") as f:
                 f.write(output)
 
