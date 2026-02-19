@@ -197,21 +197,27 @@ def compute_intent_hash(intent: Intent) -> str:
     return hashlib.sha256(canonical_json.encode()).hexdigest()[:12]
 
 
-def find_project_root(start_path: Optional[Path] = None) -> Optional[Path]:
+def find_project_root(start_path: Optional[Path] = None, max_depth: int = 20) -> Optional[Path]:
     """
     Find the .intentlog directory by searching up from start_path.
+
+    Args:
+        start_path: Starting directory (default: cwd)
+        max_depth: Maximum number of parent directories to traverse
 
     Returns the path containing .intentlog, or None if not found.
     """
     current = Path(start_path or os.getcwd()).resolve()
 
-    while current != current.parent:
+    depth = 0
+    while current != current.parent and depth < max_depth:
         if (current / INTENTLOG_DIR).is_dir():
             return current
         current = current.parent
+        depth += 1
 
-    # Check root
-    if (current / INTENTLOG_DIR).is_dir():
+    # Check final level (filesystem root)
+    if depth <= max_depth and (current / INTENTLOG_DIR).is_dir():
         return current
 
     return None
@@ -321,9 +327,13 @@ class IntentLogStorage:
         # Create .gitignore for sensitive data
         gitignore_path = self.intentlog_dir / ".gitignore"
         with open(gitignore_path, 'w') as f:
-            f.write("# IntentLog sensitive data\n")
+            f.write("# IntentLog sensitive data — never commit!\n")
             f.write("*.key\n")
+            f.write("*.pem\n")
             f.write("*.secret\n")
+            f.write("keys.json\n")
+            f.write("violations.jsonl\n")
+            f.write("network_audit.jsonl\n")
             f.write("temp/\n")
 
         logger.info("Project initialized successfully", project=project_name)

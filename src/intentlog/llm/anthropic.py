@@ -6,6 +6,7 @@ Includes rate limiting and retry logic for production reliability.
 """
 
 import json
+import time as _time
 from typing import Optional, List, Dict, Any
 from urllib.request import Request, urlopen
 from urllib.error import HTTPError, URLError
@@ -19,6 +20,8 @@ from .provider import (
     RateLimitError,
     AuthenticationError,
     ModelNotFoundError,
+    check_outbound_content,
+    get_communication_monitor,
 )
 from ..logging import get_logger
 
@@ -71,20 +74,47 @@ class AnthropicProvider(LLMProvider):
         """Make HTTP request to Anthropic API (internal, without rate limiting)"""
         url = f"{self._get_base_url()}/{endpoint}"
         logger = get_logger()
+        monitor = get_communication_monitor()
+
+        encoded_body = json.dumps(data).encode("utf-8")
+        start = _time.perf_counter()
 
         try:
             request = Request(
                 url,
-                data=json.dumps(data).encode("utf-8"),
+                data=encoded_body,
                 headers=self._get_headers(),
                 method="POST",
             )
 
             with urlopen(request, timeout=self.config.timeout) as response:
-                return json.loads(response.read().decode("utf-8"))
+                raw = response.read()
+                status_code = response.status
+                result = json.loads(raw.decode("utf-8"))
+
+            duration_ms = (_time.perf_counter() - start) * 1000
+            logger.info(
+                "Anthropic API request",
+                endpoint=endpoint, status=status_code,
+                duration_ms=round(duration_ms, 1),
+            )
+            anomaly = monitor.record_request(
+                url, bytes_sent=len(encoded_body),
+                bytes_received=len(raw),
+                status_code=status_code, duration_ms=duration_ms,
+            )
+            if anomaly:
+                logger.warning("Communication anomaly: %s", anomaly)
+
+            return result
 
         except HTTPError as e:
+            duration_ms = (_time.perf_counter() - start) * 1000
             body = e.read().decode("utf-8") if e.fp else ""
+            monitor.record_request(
+                url, bytes_sent=len(encoded_body),
+                status_code=e.code, duration_ms=duration_ms,
+            )
             try:
                 error_data = json.loads(body)
                 error_msg = error_data.get("error", {}).get("message", body)
@@ -120,6 +150,8 @@ class AnthropicProvider(LLMProvider):
 
     def complete(self, prompt: str, system: Optional[str] = None) -> LLMResponse:
         """Generate completion using Anthropic messages API"""
+        check_outbound_content(prompt, system)
+
         data = {
             "model": self.get_model(),
             "max_tokens": self.config.max_tokens,

@@ -64,6 +64,13 @@ def cmd_commit(args):
     sign = getattr(args, 'sign', False)
     key_password = getattr(args, 'key_password', None)
 
+    # If signing with encrypted key but no password, prompt interactively
+    if sign and key_password is None and sys.stdin.isatty():
+        import getpass
+        key_password = getpass.getpass("Key password (empty if unencrypted): ")
+        if not key_password:
+            key_password = None
+
     storage = IntentLogStorage()
 
     try:

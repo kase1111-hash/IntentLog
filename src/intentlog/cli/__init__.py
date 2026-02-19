@@ -48,8 +48,8 @@ def create_parser():
             import importlib
             mod = importlib.import_module(module_name, __name__)
             getattr(mod, func_name)(subparsers)
-        except Exception:
-            pass  # Command group unavailable — skip silently
+        except (ImportError, ModuleNotFoundError):
+            pass  # Command group unavailable (optional dependency missing)
 
     return parser
 

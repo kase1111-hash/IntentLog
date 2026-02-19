@@ -48,6 +48,19 @@ venv.bak/
 *~
 .DS_Store
 
+# Secrets and credentials
+.env
+.env.*
+.env.local
+*.key
+*.pem
+*.secret
+*.p12
+*.pfx
+credentials.json
+secrets.json
+service-account.json
+
 # IntentLog specific
 .intentlog/
 *.ilog

@@ -62,6 +62,10 @@ def validate_name(
 
     name = name.strip()
 
+    # Reject null bytes (could truncate in C-level file operations)
+    if '\0' in name:
+        raise InvalidNameError(f"{field_name} contains null bytes")
+
     if len(name) > max_length:
         raise InvalidNameError(
             f"{field_name} too long: {len(name)} > {max_length} characters"
@@ -327,6 +331,46 @@ def validate_metadata(metadata: dict, max_depth: int = 5) -> dict:
     return metadata
 
 
+# ---- Prompt injection detection ----
+
+# Patterns that suggest prompt injection attempts
+_INJECTION_PATTERNS = [
+    (re.compile(r"ignore\s+(the\s+)?(above|previous|prior)\s+(instructions?|context|prompt)", re.IGNORECASE), "ignore_instructions"),
+    (re.compile(r"disregard\s+(all\s+)?(previous|prior|above)", re.IGNORECASE), "disregard_previous"),
+    (re.compile(r"forget\s+(everything|all|your\s+instructions)", re.IGNORECASE), "forget_instructions"),
+    (re.compile(r"you\s+are\s+now\s+", re.IGNORECASE), "role_override"),
+    (re.compile(r"new\s+instructions?\s*:", re.IGNORECASE), "new_instructions"),
+    (re.compile(r"system\s*prompt\s*:", re.IGNORECASE), "system_prompt_leak"),
+    (re.compile(r"</?(system|assistant|user|instruction)>", re.IGNORECASE), "xml_tag_injection"),
+    (re.compile(r"<\|endoftext\|>", re.IGNORECASE), "special_token_injection"),
+    (re.compile(r"\[INST\]|\[/INST\]|\[SYS\]|\[/SYS\]", re.IGNORECASE), "special_token_injection"),
+    (re.compile(r"act\s+as\s+(a\s+|an\s+)?(?:different|new|another)", re.IGNORECASE), "role_override"),
+    (re.compile(r"override\s+(the\s+)?(system|safety|content)\s+(prompt|filter|policy)", re.IGNORECASE), "override_safety"),
+    (re.compile(r"do\s+not\s+follow\s+(the\s+)?(above|previous|system)", re.IGNORECASE), "ignore_instructions"),
+]
+
+
+def scan_for_injection_patterns(text: str) -> List[str]:
+    """
+    Scan text for common prompt injection patterns.
+
+    Args:
+        text: The text to scan
+
+    Returns:
+        List of detected pattern names (empty if clean)
+    """
+    if not text:
+        return []
+
+    detected = []
+    for pattern, name in _INJECTION_PATTERNS:
+        if pattern.search(text):
+            if name not in detected:
+                detected.append(name)
+    return detected
+
+
 # Convenience exports
 __all__ = [
     "ValidationError",
@@ -341,4 +385,5 @@ __all__ = [
     "validate_file_path",
     "validate_intent_reasoning",
     "validate_metadata",
+    "scan_for_injection_patterns",
 ]

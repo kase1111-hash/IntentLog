@@ -132,6 +132,43 @@ def log_context(**kwargs):
         set_current_log_context(old_context)
 
 
+class SecretRedactingFilter(logging.Filter):
+    """
+    Logging filter that redacts potential secrets from log messages.
+
+    Scans for common credential patterns and replaces them with [REDACTED].
+    """
+
+    import re as _re
+    _REDACT_PATTERNS = [
+        _re.compile(r"AKIA[0-9A-Z]{16}"),
+        _re.compile(r"(?:sk|pk|api)[_-](?:live|test|prod|key)?[_-]?[a-zA-Z0-9]{20,}"),
+        _re.compile(r"Bearer\s+[a-zA-Z0-9._\-]{20,}"),
+        _re.compile(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"),
+        _re.compile(r"gh[ps]_[a-zA-Z0-9]{36,}"),
+        _re.compile(r"xox[bpras]-[a-zA-Z0-9\-]{10,}"),
+    ]
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        if record.msg and isinstance(record.msg, str):
+            for pattern in self._REDACT_PATTERNS:
+                record.msg = pattern.sub("[REDACTED]", record.msg)
+        if record.args:
+            if isinstance(record.args, dict):
+                record.args = {
+                    k: self._redact_value(v) for k, v in record.args.items()
+                }
+            elif isinstance(record.args, tuple):
+                record.args = tuple(self._redact_value(a) for a in record.args)
+        return True
+
+    def _redact_value(self, value):
+        if isinstance(value, str):
+            for pattern in self._REDACT_PATTERNS:
+                value = pattern.sub("[REDACTED]", value)
+        return value
+
+
 class StructuredFormatter(logging.Formatter):
     """
     JSON formatter for structured logging.
@@ -292,9 +329,13 @@ class IntentLogLogger:
         else:
             formatter = ConsoleFormatter()
 
+        # Secret redaction filter (applied to all handlers)
+        redacting_filter = SecretRedactingFilter()
+
         # Console handler
         console_handler = logging.StreamHandler(sys.stderr)
         console_handler.setFormatter(formatter)
+        console_handler.addFilter(redacting_filter)
         self._logger.addHandler(console_handler)
 
         # File handler if specified
@@ -302,6 +343,7 @@ class IntentLogLogger:
             file_handler = logging.FileHandler(log_file)
             # Always use JSON for file logging
             file_handler.setFormatter(StructuredFormatter(pretty=False))
+            file_handler.addFilter(redacting_filter)
             self._logger.addHandler(file_handler)
 
         self._configured = True
