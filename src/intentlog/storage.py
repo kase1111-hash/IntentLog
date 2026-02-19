@@ -216,8 +216,8 @@ def find_project_root(start_path: Optional[Path] = None, max_depth: int = 20) ->
         current = current.parent
         depth += 1
 
-    # Check final level
-    if depth < max_depth and (current / INTENTLOG_DIR).is_dir():
+    # Check final level (filesystem root)
+    if depth <= max_depth and (current / INTENTLOG_DIR).is_dir():
         return current
 
     return None

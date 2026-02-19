@@ -473,7 +473,10 @@ class KeyManager:
                         stacklevel=2,
                     )
             except (ValueError, TypeError):
-                pass
+                import logging
+                logging.getLogger("intentlog").warning(
+                    "Could not parse key creation date for '%s': %s", name, created_at
+                )
 
         # Load keys
         with open(private_path, "rb") as f:

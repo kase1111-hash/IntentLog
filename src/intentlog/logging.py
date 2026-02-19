@@ -142,7 +142,7 @@ class SecretRedactingFilter(logging.Filter):
     import re as _re
     _REDACT_PATTERNS = [
         _re.compile(r"AKIA[0-9A-Z]{16}"),
-        _re.compile(r"(?:sk|pk|api)[_-](?:live|test|key)[_-][a-zA-Z0-9]{20,}"),
+        _re.compile(r"(?:sk|pk|api)[_-](?:live|test|prod|key)?[_-]?[a-zA-Z0-9]{20,}"),
         _re.compile(r"Bearer\s+[a-zA-Z0-9._\-]{20,}"),
         _re.compile(r"-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----"),
         _re.compile(r"gh[ps]_[a-zA-Z0-9]{36,}"),

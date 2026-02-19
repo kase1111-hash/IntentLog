@@ -39,7 +39,7 @@ def audit_logs(file_path: str, max_repeats: int = 3) -> Tuple[bool, List[AuditEr
     Returns:
         Tuple of (passed: bool, errors: List[AuditError])
     """
-    with open(file_path, 'r') as f:
+    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
         logs = f.read()
 
     errors = []

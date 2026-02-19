@@ -392,8 +392,9 @@ class BackupManager:
                 f"Refusing to extract member with absolute path: {member.name}"
             )
 
-        # Reject path traversal components
-        if ".." in member.name.split("/"):
+        # Reject path traversal components (check both / and \ separators)
+        parts = member.name.replace("\\", "/").split("/")
+        if ".." in parts:
             raise RestoreError(
                 f"Refusing to extract member with path traversal: {member.name}"
             )

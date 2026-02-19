@@ -62,6 +62,10 @@ def validate_name(
 
     name = name.strip()
 
+    # Reject null bytes (could truncate in C-level file operations)
+    if '\0' in name:
+        raise InvalidNameError(f"{field_name} contains null bytes")
+
     if len(name) > max_length:
         raise InvalidNameError(
             f"{field_name} too long: {len(name)} > {max_length} characters"

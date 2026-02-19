@@ -376,3 +376,97 @@ class TestAuditInjectionCheck:
         assert not passed
         error_types = [e.error_type for e in errors]
         assert "INJECTION_RISK" in error_types
+
+    def test_audit_handles_binary_content(self, tmp_path):
+        """audit_logs should handle files with invalid encoding gracefully."""
+        from intentlog.audit import audit_logs
+
+        log_file = tmp_path / "binary.log"
+        log_file.write_bytes(
+            b"intent_name: 'test'\n"
+            b"intent_reasoning: 'ok'\n"
+            b"\xff\xfe\x00\x01 binary noise\n"
+        )
+
+        # Should not raise
+        passed, errors = audit_logs(str(log_file))
+        assert passed
+
+
+# ---- Null Byte Rejection (validation edge case) ----
+
+class TestNullByteRejection:
+    """Test that null bytes in names are rejected."""
+
+    def test_rejects_null_byte_in_key_name(self):
+        from intentlog.validation import validate_key_name, InvalidNameError
+
+        with pytest.raises(InvalidNameError, match="null bytes"):
+            validate_key_name("test\x00evil")
+
+    def test_rejects_null_byte_in_branch_name(self):
+        from intentlog.validation import validate_branch_name, InvalidNameError
+
+        with pytest.raises(InvalidNameError, match="null bytes"):
+            validate_branch_name("main\x00evil")
+
+
+# ---- Backslash Path Traversal in Tar (backup edge case) ----
+
+class TestBackslashPathTraversal:
+    """Test that backslash-based path traversal is caught in tar extraction."""
+
+    def test_rejects_backslash_traversal(self, tmp_path):
+        from intentlog.backup import BackupManager, RestoreError
+
+        tar_path = tmp_path / "test.tar"
+        with tarfile.open(tar_path, "w") as tar:
+            info = tarfile.TarInfo(name="..\\..\\etc\\passwd")
+            info.size = 5
+            tar.addfile(info, io.BytesIO(b"evil!"))
+
+        with tarfile.open(tar_path, "r") as tar:
+            member = tar.getmembers()[0]
+            with pytest.raises(RestoreError, match="path traversal"):
+                BackupManager._safe_extract_member(tar, member, tmp_path)
+
+
+# ---- Trust Level Validation (core.py) ----
+
+class TestTrustLevelValidation:
+    """Test that invalid trust levels are rejected."""
+
+    def test_rejects_invalid_trust_level(self):
+        from intentlog.core import Intent
+
+        with pytest.raises(ValueError, match="Invalid trust_level"):
+            Intent(intent_name="test", intent_reasoning="test", trust_level="admin")
+
+    def test_accepts_all_valid_trust_levels(self):
+        from intentlog.core import Intent
+
+        for level in ("unverified", "signed", "verified"):
+            intent = Intent(intent_name="test", intent_reasoning="r", trust_level=level)
+            assert intent.trust_level == level
+
+
+# ---- Export Symlink Containment ----
+
+class TestExportSymlinkContainment:
+    """Test that export path containment catches symlinks to blocked dirs."""
+
+    def test_rejects_symlink_to_etc(self, tmp_path):
+        from intentlog.export import IntentExporter
+
+        # Create a symlink that points to /etc
+        link = tmp_path / "link_to_etc"
+        try:
+            link.symlink_to("/etc")
+        except OSError:
+            pytest.skip("Cannot create symlinks in this environment")
+
+        target = link / "evil_output.json"
+        exporter = IntentExporter()
+
+        with pytest.raises(ValueError, match="system directory"):
+            exporter.export([], output_path=target)

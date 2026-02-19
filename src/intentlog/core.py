@@ -23,6 +23,15 @@ class Intent:
     parent_intent_id: Optional[str] = None
     trust_level: str = "unverified"  # "unverified", "signed", "verified"
 
+    VALID_TRUST_LEVELS = ("unverified", "signed", "verified")
+
+    def __post_init__(self):
+        if self.trust_level not in self.VALID_TRUST_LEVELS:
+            raise ValueError(
+                f"Invalid trust_level '{self.trust_level}'. "
+                f"Must be one of: {', '.join(self.VALID_TRUST_LEVELS)}"
+            )
+
     def to_dict(self) -> Dict[str, Any]:
         """Convert intent to dictionary format"""
         return {

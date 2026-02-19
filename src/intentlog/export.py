@@ -299,11 +299,19 @@ class IntentExporter:
         # Write to file if path provided
         if output_path:
             # Safety check: prevent writing to system directories
+            # Use strict=False so resolve works even if path doesn't exist yet,
+            # but resolve parent to catch symlinks pointing to blocked dirs
             from pathlib import Path as _Path
-            resolved = _Path(output_path).resolve()
+            out = _Path(output_path)
+            resolved = out.resolve()
+            # Also resolve the parent directory (which should exist) to catch symlinks
+            if out.parent.exists():
+                resolved_parent = out.parent.resolve()
+            else:
+                resolved_parent = resolved.parent
             _blocked_prefixes = ("/etc", "/usr", "/bin", "/sbin", "/boot", "/proc", "/sys")
             for prefix in _blocked_prefixes:
-                if str(resolved).startswith(prefix):
+                if str(resolved).startswith(prefix) or str(resolved_parent).startswith(prefix):
                     raise ValueError(f"Refusing to write to system directory: {prefix}")
             with open(output_path, "w", encoding="utf-8") as f:
                 f.write(output)
