@@ -7,7 +7,9 @@ CLI commands (init, commit, log, status, show, hooks, blame).
 
 import json
 import os
+import shutil
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -711,3 +713,127 @@ class TestCLIGitIntegration:
 
         rc, out, _ = self._run_ilog("link", src, "nonexistent99", cwd=git_repo)
         assert rc != 0
+
+
+# =========================================================================
+# prepare-commit-msg hook behaviour tests
+# =========================================================================
+
+
+_GIT_AVAILABLE = shutil.which("git") is not None
+_SH_AVAILABLE = shutil.which("sh") is not None
+
+
+def _hook_env():
+    """Environment for running the hook with the current interpreter's scripts on PATH."""
+    env = os.environ.copy()
+    env["PATH"] = str(Path(sys.executable).parent) + os.pathsep + env.get("PATH", "")
+    return env
+
+
+@pytest.mark.skipif(not _GIT_AVAILABLE, reason="git not available")
+class TestPrepareCommitMsgHook:
+    """The hook must never alter the stored commit message."""
+
+    def test_message_commit_is_not_altered(self, ilog_in_git):
+        storage, git_repo = ilog_in_git
+        storage.add_chained_intent(
+            name="why",
+            reasoning="why",
+            metadata={"git_context": get_git_context(git_repo)},
+        )
+        install_hooks(git_repo)
+
+        (git_repo / "f").write_text("")
+        _git(git_repo, "add", "f")
+        result = subprocess.run(
+            ["git", "-c", "commit.gpgsign=false", "commit", "-m", "second"],
+            cwd=git_repo,
+            capture_output=True,
+            text=True,
+            env=_hook_env(),
+        )
+        assert result.returncode == 0, f"git commit failed: {result.stderr}"
+
+        stored = _git(git_repo, "log", "-1", "--format=%B").stdout
+        assert stored.strip() == "second"
+
+    @pytest.mark.skipif(not _SH_AVAILABLE, reason="sh not available")
+    def test_editor_commit_appends_comment_block(self, ilog_in_git):
+        storage, git_repo = ilog_in_git
+        storage.add_chained_intent(
+            name="Hook intent",
+            reasoning="Visible in the editor only",
+        )
+        install_hooks(git_repo)
+        hook_path = git_repo / ".git" / "hooks" / "prepare-commit-msg"
+
+        original = "subject\n\nbody\n"
+        msg_file = git_repo / "COMMIT_MSG_TEST"
+        msg_file.write_text(original)
+
+        result = subprocess.run(
+            ["sh", str(hook_path), str(msg_file), ""],
+            cwd=git_repo,
+            capture_output=True,
+            text=True,
+            env=_hook_env(),
+        )
+        assert result.returncode == 0, result.stderr
+
+        content = msg_file.read_text()
+        assert content.startswith(original)
+        added = content[len(original):]
+        added_lines = [line for line in added.splitlines() if line.strip()]
+        assert added_lines, "hook should have appended an intent block"
+        assert all(line.startswith("#") for line in added_lines)
+        assert "Hook intent" in added
+        assert "IntentLog: Latest recorded intent" in added
+
+    @pytest.mark.skipif(not _SH_AVAILABLE, reason="sh not available")
+    def test_message_source_leaves_file_untouched(self, ilog_in_git):
+        storage, git_repo = ilog_in_git
+        storage.add_chained_intent(name="Hook intent", reasoning="Should not appear")
+        install_hooks(git_repo)
+        hook_path = git_repo / ".git" / "hooks" / "prepare-commit-msg"
+
+        original = b"subject\n\nbody\n"
+        msg_file = git_repo / "COMMIT_MSG_TEST"
+        msg_file.write_bytes(original)
+
+        result = subprocess.run(
+            ["sh", str(hook_path), str(msg_file), "message"],
+            cwd=git_repo,
+            capture_output=True,
+            text=True,
+            env=_hook_env(),
+        )
+        assert result.returncode == 0, result.stderr
+        assert msg_file.read_bytes() == original
+
+    @pytest.mark.skipif(not _SH_AVAILABLE, reason="sh not available")
+    def test_no_project_leaves_file_untouched(self, git_repo):
+        install_hooks(git_repo)
+        hook_path = git_repo / ".git" / "hooks" / "prepare-commit-msg"
+
+        original = b"subject\n\nbody\n"
+        msg_file = git_repo / "COMMIT_MSG_TEST"
+        msg_file.write_bytes(original)
+
+        result = subprocess.run(
+            ["sh", str(hook_path), str(msg_file), ""],
+            cwd=git_repo,
+            capture_output=True,
+            text=True,
+            env=_hook_env(),
+        )
+        assert result.returncode == 0, result.stderr
+        assert msg_file.read_bytes() == original
+
+    def test_reinstall_keeps_marker(self, git_repo):
+        install_hooks(git_repo)
+        install_hooks(git_repo)
+        hook_path = git_repo / ".git" / "hooks" / "prepare-commit-msg"
+        content = hook_path.read_text()
+        assert content.count(HOOK_MARKER) == 1
+        assert "--json" not in content

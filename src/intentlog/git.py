@@ -152,7 +152,9 @@ def get_git_log_for_file(
 PREPARE_COMMIT_MSG_HOOK = """\
 #!/bin/sh
 # IntentLog prepare-commit-msg hook
-# Prepends the latest intent summary to the git commit message.
+# Appends the latest recorded intent, as comment lines, to the end of the
+# commit message shown in the editor. Git strips comment lines, so this is
+# informational only and never changes the stored commit message.
 #
 # Installed by: ilog hooks install
 # Remove by deleting this file or running: ilog hooks uninstall
@@ -160,21 +162,30 @@ PREPARE_COMMIT_MSG_HOOK = """\
 COMMIT_MSG_FILE="$1"
 COMMIT_SOURCE="$2"
 
-# Only modify if this is a normal commit (not merge, squash, etc.)
-if [ -z "$COMMIT_SOURCE" ] || [ "$COMMIT_SOURCE" = "message" ]; then
-    # Get the latest intent from IntentLog
-    INTENT=$(intentlog log --limit 1 --json 2>/dev/null)
-    if [ $? -eq 0 ] && [ -n "$INTENT" ]; then
-        # Prepend intent info to commit message
-        TEMP_FILE=$(mktemp)
-        echo "" >> "$TEMP_FILE"
-        echo "# IntentLog: Latest recorded intent" >> "$TEMP_FILE"
-        echo "$INTENT" >> "$TEMP_FILE"
-        echo "" >> "$TEMP_FILE"
-        cat "$COMMIT_MSG_FILE" >> "$TEMP_FILE"
-        mv "$TEMP_FILE" "$COMMIT_MSG_FILE"
-    fi
-fi
+# Only act for editor-driven commits. Leave -m/-F ("message"), merge,
+# squash and amend ("commit") messages untouched.
+case "$COMMIT_SOURCE" in
+    ""|template) ;;
+    *) exit 0 ;;
+esac
+
+# Comment lines are kept when git is told not to strip them; stay out.
+case "$(git config --get commit.cleanup 2>/dev/null)" in
+    whitespace|verbatim) exit 0 ;;
+esac
+
+# Bail out quietly when IntentLog is not installed.
+command -v intentlog >/dev/null 2>&1 || exit 0
+
+# Get the latest intent as plain text. Fails silently when there is no
+# IntentLog project here.
+INTENT=$(intentlog log --limit 1 2>/dev/null) || exit 0
+[ -n "$INTENT" ] || exit 0
+
+{
+    printf '\\n# IntentLog: Latest recorded intent\\n'
+    printf '%s\\n' "$INTENT" | sed 's/^/# /'
+} >> "$COMMIT_MSG_FILE"
 """
 
 POST_COMMIT_HOOK = """\
@@ -203,6 +214,11 @@ def get_hooks_dir(git_root: Path) -> Optional[Path]:
 def install_hooks(git_root: Path) -> List[str]:
     """
     Install IntentLog git hooks.
+
+    Installs a ``prepare-commit-msg`` hook that, for editor-driven commits
+    only, appends the latest recorded intent to the end of the commit
+    message file as comment lines. Git strips those lines, so the stored
+    commit message is never changed.
 
     Args:
         git_root: Path to the git repository root
