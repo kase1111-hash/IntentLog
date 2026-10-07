@@ -8,12 +8,11 @@ The CLI is organized into submodules by command group:
 
 | Module | Commands |
 |--------|----------|
-| `cli.core` | init, commit, branch, log, search, audit, status, diff, merge, config |
-| `cli.mp02` | observe, segment, receipt, ledger, verify |
-| `cli.analytics` | export, analytics, metrics, sufficiency |
+| `cli.core` | init, commit, branch, log, search, audit, status, diff, merge, config, show, hooks, blame, tag, link |
+| `cli.analytics` | export, analytics, metrics |
 | `cli.crypto` | keys, chain |
-| `cli.privacy` | privacy |
 | `cli.formalize` | formalize |
+| `cli.completion` | completion |
 
 ## Main Entry Point
 
@@ -36,24 +35,17 @@ The CLI is organized into submodules by command group:
         - cmd_branch
         - cmd_log
         - cmd_search
+        - cmd_audit
         - cmd_status
         - cmd_diff
         - cmd_merge
         - cmd_config
+        - cmd_show
+        - cmd_hooks
+        - cmd_blame
+        - cmd_tag
+        - cmd_link
         - register_core_commands
-
-## MP-02 Commands
-
-::: intentlog.cli.mp02
-    options:
-      show_root_heading: true
-      members:
-        - cmd_observe
-        - cmd_segment
-        - cmd_receipt
-        - cmd_ledger
-        - cmd_verify
-        - register_mp02_commands
 
 ## Analytics Commands
 
@@ -64,7 +56,6 @@ The CLI is organized into submodules by command group:
         - cmd_export
         - cmd_analytics
         - cmd_metrics
-        - cmd_sufficiency
         - register_analytics_commands
 
 ## Crypto Commands
