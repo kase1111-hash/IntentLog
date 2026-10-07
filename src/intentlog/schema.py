@@ -527,7 +527,7 @@ def check_project_health(project_path: Optional[Path] = None) -> Dict[str, Any]:
 
     storage = IntentLogStorage(project_path)
 
-    results = {
+    results: Dict[str, Any] = {
         "healthy": True,
         "project_found": True,
         "project_path": str(project_path),
@@ -548,18 +548,27 @@ def check_project_health(project_path: Optional[Path] = None) -> Dict[str, Any]:
     # Chain verification
     try:
         chain_result = storage.verify_chain()
+        chain_issues = list(chain_result.errors)
+        if not chain_result.valid and not chain_issues:
+            chain_issues.append("Chain verification failed")
         results["checks"]["chain_integrity"] = {
             "passed": chain_result.valid,
-            "issues": [chain_result.error] if chain_result.error else [],
+            "issues": chain_issues,
+            "warnings": list(chain_result.warnings),
         }
         if not chain_result.valid:
             results["healthy"] = False
-            results["issues"].append(f"Chain integrity: {chain_result.error}")
+            results["issues"].extend(
+                f"Chain integrity: {issue}" for issue in chain_issues
+            )
     except Exception as e:
         results["checks"]["chain_integrity"] = {
             "passed": False,
             "issues": [str(e)],
+            "warnings": [],
         }
+        results["healthy"] = False
+        results["issues"].append(f"Chain integrity: {e}")
 
     # Count intents
     try:

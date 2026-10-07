@@ -15,7 +15,7 @@ import os
 import sys
 import time
 from contextlib import contextmanager
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from datetime import datetime
 from enum import Enum
 from functools import wraps
@@ -97,6 +97,26 @@ class LogContext:
             extra={**self.extra, **other.extra},
         )
 
+    @classmethod
+    def from_kwargs(cls, **kwargs: Any) -> "LogContext":
+        """
+        Build a context from keyword arguments.
+
+        Keyword arguments that name a LogContext field are set directly.
+        Any other keyword argument (e.g. ``backup_id``) is stored in
+        ``extra`` instead of raising ``TypeError``, so callers can attach
+        ad-hoc correlation fields to log entries.
+        """
+        extra: Dict[str, Any] = dict(kwargs.pop("extra", None) or {})
+        field_names = {f.name for f in fields(cls)}
+        known: Dict[str, Any] = {}
+        for key, value in kwargs.items():
+            if key in field_names:
+                known[key] = value
+            else:
+                extra[key] = value
+        return cls(extra=extra, **known)
+
 
 # Thread-local context storage
 import threading
@@ -122,9 +142,12 @@ def log_context(**kwargs):
         with log_context(intent_id="abc123", operation="commit"):
             logger.info("Processing intent")
             # Log entries will include intent_id and operation
+
+    Keyword arguments that are not LogContext fields are stored in the
+    context's ``extra`` dict (see ``LogContext.from_kwargs``).
     """
     old_context = get_current_log_context()
-    new_context = old_context.merge(LogContext(**kwargs))
+    new_context = old_context.merge(LogContext.from_kwargs(**kwargs))
     set_current_log_context(new_context)
     try:
         yield new_context

@@ -202,7 +202,7 @@ class BackupManager:
         backup_id = self._generate_backup_id()
         config = self.storage.load_config()
 
-        with log_context(operation="backup", backup_id=backup_id):
+        with log_context(operation="backup", extra={"backup_id": backup_id}):
             logger.info(f"Creating {backup_type} backup", project=config.project_name)
 
             if progress_callback:
@@ -462,7 +462,7 @@ class BackupManager:
         if not backup_path:
             raise RestoreError(f"Backup archive not found for: {backup_id}")
 
-        with log_context(operation="restore", backup_id=backup_id):
+        with log_context(operation="restore", extra={"backup_id": backup_id}):
             # Verify if requested
             if verify_first:
                 if progress_callback:
