@@ -144,6 +144,7 @@ class Benchmark:
 def run_core_benchmarks(bench: Benchmark):
     """Run core module benchmarks."""
     from intentlog.core import Intent, IntentLog
+    from intentlog.merkle import ChainedIntent, chain_intents
 
     print("\n[Core Module Benchmarks]")
 
@@ -158,18 +159,17 @@ def run_core_benchmarks(bench: Benchmark):
     result = bench.run("Intent creation", create_intent)
     print(f"  Intent creation: {result.mean_time_ms:.3f}ms ({result.ops_per_second:.0f} ops/sec)")
 
-    # Benchmark: IntentLog add
+    # Benchmark: IntentLog add_intent
     log = IntentLog()
 
     def add_to_log():
-        intent = Intent(
-            intent_name="Benchmark intent",
-            intent_reasoning="Reasoning for benchmark",
+        log.add_intent(
+            name="Benchmark intent",
+            reasoning="Reasoning for benchmark",
         )
-        log.add(intent)
 
-    result = bench.run("IntentLog.add", add_to_log)
-    print(f"  IntentLog.add: {result.mean_time_ms:.3f}ms ({result.ops_per_second:.0f} ops/sec)")
+    result = bench.run("IntentLog.add_intent", add_to_log)
+    print(f"  IntentLog.add_intent: {result.mean_time_ms:.3f}ms ({result.ops_per_second:.0f} ops/sec)")
 
     # Benchmark: Intent serialization
     intent = Intent(
@@ -184,14 +184,14 @@ def run_core_benchmarks(bench: Benchmark):
     result = bench.run("Intent.to_dict", serialize_intent)
     print(f"  Intent.to_dict: {result.mean_time_ms:.3f}ms ({result.ops_per_second:.0f} ops/sec)")
 
-    # Benchmark: Intent deserialization
-    data = intent.to_dict()
+    # Benchmark: Intent deserialization (ChainedIntent.from_dict rebuilds the Intent)
+    data = chain_intents([intent])[0].to_dict()
 
     def deserialize_intent():
-        Intent.from_dict(data)
+        ChainedIntent.from_dict(data)
 
-    result = bench.run("Intent.from_dict", deserialize_intent)
-    print(f"  Intent.from_dict: {result.mean_time_ms:.3f}ms ({result.ops_per_second:.0f} ops/sec)")
+    result = bench.run("ChainedIntent.from_dict", deserialize_intent)
+    print(f"  ChainedIntent.from_dict: {result.mean_time_ms:.3f}ms ({result.ops_per_second:.0f} ops/sec)")
 
 
 def run_storage_benchmarks(bench: Benchmark):
@@ -201,103 +201,114 @@ def run_storage_benchmarks(bench: Benchmark):
 
     print("\n[Storage Module Benchmarks]")
 
-    # Setup project
+    # Setup project (explicit project_path so the cwd is irrelevant)
     project_dir = bench.temp_dir / "storage_bench"
     project_dir.mkdir(exist_ok=True)
 
-    import os
-    original_cwd = os.getcwd()
-    os.chdir(project_dir)
+    storage = IntentLogStorage(project_path=project_dir)
+    storage.init_project("benchmark-project", force=True)
 
-    try:
-        storage = IntentLogStorage()
-        storage.init_project("benchmark-project", force=True)
+    # Benchmark: add_intent
+    counter = [0]
 
-        # Benchmark: add_intent
-        counter = [0]
-
-        def add_intent():
-            counter[0] += 1
-            storage.add_intent(
-                name=f"Benchmark intent {counter[0]}",
-                reasoning="Reasoning for storage benchmark test",
-                metadata={"iteration": counter[0]},
-            )
-
-        result = bench.run("IntentLogStorage.add_intent", add_intent)
-        print(f"  add_intent: {result.mean_time_ms:.3f}ms ({result.ops_per_second:.0f} ops/sec)")
-
-        # Benchmark: load_intents
-        def load_intents():
-            storage.load_intents()
-
-        result = bench.run("IntentLogStorage.load_intents", load_intents)
-        print(f"  load_intents: {result.mean_time_ms:.3f}ms ({result.ops_per_second:.0f} ops/sec)")
-
-        # Benchmark: search_intents
-        def search_intents():
-            storage.search_intents("benchmark")
-
-        result = bench.run("IntentLogStorage.search_intents", search_intents)
-        print(f"  search_intents: {result.mean_time_ms:.3f}ms ({result.ops_per_second:.0f} ops/sec)")
-
-        # Benchmark: compute_intent_hash
-        intent = Intent(
-            intent_name="Hash test",
-            intent_reasoning="Testing hash computation",
+    def add_intent():
+        counter[0] += 1
+        storage.add_intent(
+            name=f"Benchmark intent {counter[0]}",
+            reasoning="Reasoning for storage benchmark test",
+            metadata={"iteration": counter[0]},
         )
 
-        def compute_hash():
-            compute_intent_hash(intent)
+    result = bench.run("IntentLogStorage.add_intent", add_intent)
+    print(f"  add_intent: {result.mean_time_ms:.3f}ms ({result.ops_per_second:.0f} ops/sec)")
 
-        result = bench.run("compute_intent_hash", compute_hash)
-        print(f"  compute_intent_hash: {result.mean_time_ms:.3f}ms ({result.ops_per_second:.0f} ops/sec)")
+    # Benchmark: load_intents
+    def load_intents():
+        storage.load_intents()
 
-    finally:
-        os.chdir(original_cwd)
+    result = bench.run("IntentLogStorage.load_intents", load_intents)
+    print(f"  load_intents: {result.mean_time_ms:.3f}ms ({result.ops_per_second:.0f} ops/sec)")
+
+    # Benchmark: search_intents
+    def search_intents():
+        storage.search_intents("benchmark")
+
+    result = bench.run("IntentLogStorage.search_intents", search_intents)
+    print(f"  search_intents: {result.mean_time_ms:.3f}ms ({result.ops_per_second:.0f} ops/sec)")
+
+    # Benchmark: compute_intent_hash
+    intent = Intent(
+        intent_name="Hash test",
+        intent_reasoning="Testing hash computation",
+    )
+
+    def compute_hash():
+        compute_intent_hash(intent)
+
+    result = bench.run("compute_intent_hash", compute_hash)
+    print(f"  compute_intent_hash: {result.mean_time_ms:.3f}ms ({result.ops_per_second:.0f} ops/sec)")
 
 
 def run_chain_benchmarks(bench: Benchmark):
-    """Run Merkle chain benchmarks."""
-    from intentlog.merkle import compute_hash, build_merkle_tree
+    """Run hash-chain (Merkle) benchmarks."""
+    from intentlog.core import Intent
+    from intentlog.merkle import chain_intents, compute_intent_content_hash, verify_chain
 
     print("\n[Chain/Merkle Benchmarks]")
 
-    # Benchmark: SHA-256 hash computation
-    data = b"Sample data for hashing " * 10
+    # Benchmark: SHA-256 hash computation (canonical intent content hash)
+    intent = Intent(
+        intent_name="Hash benchmark intent",
+        intent_reasoning="Sample data for hashing " * 10,
+    )
 
-    def hash_data():
-        compute_hash(data)
+    def hash_intent():
+        compute_intent_content_hash(intent)
 
-    result = bench.run("SHA-256 hash", hash_data)
-    print(f"  SHA-256 hash: {result.mean_time_ms:.3f}ms ({result.ops_per_second:.0f} ops/sec)")
+    result = bench.run("SHA-256 content hash", hash_intent)
+    print(f"  SHA-256 content hash: {result.mean_time_ms:.3f}ms ({result.ops_per_second:.0f} ops/sec)")
 
-    # Benchmark: Merkle tree building (10 items)
-    items_10 = [f"item_{i}".encode() for i in range(10)]
+    def make_intents(count: int) -> List[Intent]:
+        return [
+            Intent(intent_name=f"item_{i}", intent_reasoning=f"Reasoning for item {i}")
+            for i in range(count)
+        ]
 
-    def build_tree_10():
-        build_merkle_tree(items_10)
+    # Benchmark: hash chain building (10 items)
+    intents_10 = make_intents(10)
 
-    result = bench.run("Merkle tree (10 items)", build_tree_10)
-    print(f"  Merkle tree (10 items): {result.mean_time_ms:.3f}ms ({result.ops_per_second:.0f} ops/sec)")
+    def build_chain_10():
+        chain_intents(intents_10)
 
-    # Benchmark: Merkle tree building (100 items)
-    items_100 = [f"item_{i}".encode() for i in range(100)]
+    result = bench.run("Hash chain (10 items)", build_chain_10)
+    print(f"  Hash chain (10 items): {result.mean_time_ms:.3f}ms ({result.ops_per_second:.0f} ops/sec)")
 
-    def build_tree_100():
-        build_merkle_tree(items_100)
+    # Benchmark: hash chain building (100 items)
+    intents_100 = make_intents(100)
 
-    result = bench.run("Merkle tree (100 items)", build_tree_100)
-    print(f"  Merkle tree (100 items): {result.mean_time_ms:.3f}ms ({result.ops_per_second:.0f} ops/sec)")
+    def build_chain_100():
+        chain_intents(intents_100)
 
-    # Benchmark: Merkle tree building (1000 items)
-    items_1000 = [f"item_{i}".encode() for i in range(1000)]
+    result = bench.run("Hash chain (100 items)", build_chain_100)
+    print(f"  Hash chain (100 items): {result.mean_time_ms:.3f}ms ({result.ops_per_second:.0f} ops/sec)")
 
-    def build_tree_1000():
-        build_merkle_tree(items_1000)
+    # Benchmark: hash chain building (1000 items)
+    intents_1000 = make_intents(1000)
 
-    result = bench.run("Merkle tree (1000 items)", build_tree_1000)
-    print(f"  Merkle tree (1000 items): {result.mean_time_ms:.3f}ms ({result.ops_per_second:.0f} ops/sec)")
+    def build_chain_1000():
+        chain_intents(intents_1000)
+
+    result = bench.run("Hash chain (1000 items)", build_chain_1000)
+    print(f"  Hash chain (1000 items): {result.mean_time_ms:.3f}ms ({result.ops_per_second:.0f} ops/sec)")
+
+    # Benchmark: chain verification (1000 items)
+    chained_1000 = chain_intents(intents_1000)
+
+    def verify_chain_1000():
+        verify_chain(chained_1000)
+
+    result = bench.run("verify_chain (1000 items)", verify_chain_1000)
+    print(f"  verify_chain (1000 items): {result.mean_time_ms:.3f}ms ({result.ops_per_second:.0f} ops/sec)")
 
 
 def run_analytics_benchmarks(bench: Benchmark):
@@ -446,6 +457,10 @@ def main():
 
     iterations = 10 if args.quick else args.iterations
     warmup = 2 if args.quick else args.warmup
+
+    # Storage operations log at INFO; keep that noise out of the timings/output
+    from intentlog.logging import configure_logging
+    configure_logging(level="WARNING")
 
     bench = Benchmark(iterations=iterations, warmup=warmup)
 
