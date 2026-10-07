@@ -6,6 +6,7 @@ import os
 import json
 import tempfile
 import shutil
+import threading
 from pathlib import Path
 from datetime import datetime
 
@@ -23,6 +24,7 @@ from intentlog.storage import (
     INTENTLOG_DIR,
 )
 from intentlog.core import Intent
+from intentlog.filelock import FileLock, FileLockError, FileLockTimeout, LOCK_BACKEND
 
 
 @pytest.fixture
@@ -342,3 +344,214 @@ class TestFindProjectRoot:
         """Test when no project root exists"""
         found = find_project_root(temp_project_dir)
         assert found is None
+
+
+def _try_lock_in_thread(path, exclusive=True, timeout=0.3):
+    """Try to take a FileLock on `path` from another thread; return True if acquired."""
+    outcome = {}
+
+    def worker():
+        try:
+            with FileLock(path, exclusive=exclusive, timeout=timeout):
+                outcome["acquired"] = True
+        except FileLockTimeout:
+            outcome["acquired"] = False
+
+    t = threading.Thread(target=worker)
+    t.start()
+    t.join(timeout + 5)
+    assert not t.is_alive(), "lock attempt in helper thread hung"
+    return outcome["acquired"]
+
+
+class TestFileLockReentrancy:
+    """Tests for the per-thread re-entrant FileLock"""
+
+    def test_nested_locks_in_same_thread_do_not_block(self, temp_project_dir):
+        """Nested exclusive/shared requests inside an exclusive lock are no-ops"""
+        path = temp_project_dir / "data.json.lock"
+        outer = FileLock(path, exclusive=True, timeout=0.5)
+        with outer:
+            with FileLock(path, exclusive=True, timeout=0.5) as inner:
+                assert inner.is_locked
+                with FileLock(path, exclusive=False, timeout=0.5):
+                    pass
+            # Releasing the nested locks must not drop the outer lock
+            assert outer.is_locked
+            assert _try_lock_in_thread(path) is False
+        assert not outer.is_locked
+        assert _try_lock_in_thread(path) is True
+
+    def test_other_threads_are_excluded(self, temp_project_dir):
+        """A lock held by one thread blocks exclusive requests from another"""
+        path = temp_project_dir / "data.json.lock"
+        with FileLock(path, exclusive=True, timeout=0.5):
+            assert _try_lock_in_thread(path, exclusive=True) is False
+            assert _try_lock_in_thread(path, exclusive=False) is False
+        assert _try_lock_in_thread(path, exclusive=True) is True
+
+    @pytest.mark.skipif(LOCK_BACKEND != "fcntl", reason="shared locks need fcntl")
+    def test_shared_locks_allow_concurrent_readers(self, temp_project_dir):
+        """Shared locks from different threads do not exclude each other"""
+        path = temp_project_dir / "data.json.lock"
+        with FileLock(path, exclusive=False, timeout=0.5):
+            assert _try_lock_in_thread(path, exclusive=False) is True
+            assert _try_lock_in_thread(path, exclusive=True) is False
+
+    def test_shared_to_exclusive_upgrade_is_rejected(self, temp_project_dir):
+        """Upgrading a held shared lock to exclusive fails fast, not by timeout"""
+        path = temp_project_dir / "data.json.lock"
+        with FileLock(path, exclusive=False, timeout=0.5):
+            with pytest.raises(FileLockError):
+                FileLock(path, exclusive=True, timeout=0.5).acquire()
+
+    def test_release_without_acquire_is_noop(self, temp_project_dir):
+        """Releasing a lock that was never acquired does nothing"""
+        lock = FileLock(temp_project_dir / "data.json.lock")
+        lock.release()
+        assert not lock.is_locked
+
+
+class TestConcurrentAccess:
+    """Regression tests for lost updates under concurrent writes"""
+
+    def test_concurrent_add_intent_persists_every_write(self, initialized_project):
+        """8 threads x 25 add_intent calls -> exactly 200 unique intents persisted"""
+        project_root = initialized_project.project_root
+        num_threads = 8
+        per_thread = 25
+        errors = []
+        barrier = threading.Barrier(num_threads)
+
+        def worker(idx):
+            storage = IntentLogStorage(project_root)
+            try:
+                barrier.wait(timeout=5)
+                for i in range(per_thread):
+                    storage.add_intent(
+                        name=f"Thread {idx} intent {i}",
+                        reasoning=f"Concurrent write {idx}-{i}",
+                    )
+            except Exception as e:  # pragma: no cover - reported via assert
+                errors.append(repr(e))
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(num_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        assert not any(t.is_alive() for t in threads), "writer threads hung"
+        assert errors == []
+
+        intents = initialized_project.load_intents()
+        assert len(intents) == num_threads * per_thread
+        assert len({i.intent_id for i in intents}) == num_threads * per_thread
+        names = {i.intent_name for i in intents}
+        assert len(names) == num_threads * per_thread
+
+    def test_concurrent_add_chained_intent_keeps_chain_valid(self, initialized_project):
+        """Concurrent chained writes persist everything and leave a valid chain"""
+        project_root = initialized_project.project_root
+        num_threads = 4
+        per_thread = 10
+        errors = []
+
+        def worker(idx):
+            storage = IntentLogStorage(project_root)
+            try:
+                for i in range(per_thread):
+                    storage.add_chained_intent(
+                        name=f"Chained {idx}-{i}",
+                        reasoning="Concurrent chained write",
+                    )
+            except Exception as e:  # pragma: no cover - reported via assert
+                errors.append(repr(e))
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(num_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        assert errors == []
+        chained = initialized_project.load_chained_intents()
+        assert len(chained) == num_threads * per_thread
+        assert initialized_project.verify_chain().valid
+
+    def test_nested_operations_inside_lock_branch_do_not_deadlock(self, initialized_project):
+        """load/save/add inside lock_branch() reuse the held lock instead of blocking"""
+        storage = initialized_project
+        storage.lock_timeout = 1.0
+
+        with storage.lock_branch() as branch:
+            assert branch == "main"
+            assert storage.load_intents() == []
+            storage.save_intents([Intent(intent_name="Saved", intent_reasoning="inside lock")])
+            storage.add_intent("Added", "inside lock")
+            with storage.lock_branch("main"):
+                storage.add_chained_intent("Chained", "inside nested lock")
+            assert len(storage.load_chained_intents()) == 3
+            # Still held: another thread must not get the exclusive lock
+            lock_path = storage._get_lock_file(storage._get_branch_file("main"))
+            assert _try_lock_in_thread(lock_path) is False
+
+        # Released on exit: another thread can now take it
+        assert _try_lock_in_thread(lock_path) is True
+        assert [i.intent_name for i in storage.load_intents()] == ["Saved", "Added", "Chained"]
+
+    def test_lock_branch_excludes_other_threads(self, initialized_project):
+        """lock_branch() held in one thread blocks lock_branch() in another"""
+        storage = initialized_project
+        other = IntentLogStorage(storage.project_root)
+        other.lock_timeout = 0.3
+        outcome = {}
+
+        def try_lock():
+            try:
+                with other.lock_branch("main"):
+                    outcome["result"] = "acquired"
+            except FileLockTimeout:
+                outcome["result"] = "timeout"
+
+        with storage.lock_branch("main"):
+            t = threading.Thread(target=try_lock)
+            t.start()
+            t.join(timeout=5)
+        assert outcome["result"] == "timeout"
+
+        t = threading.Thread(target=try_lock)
+        t.start()
+        t.join(timeout=5)
+        assert outcome["result"] == "acquired"
+
+    def test_lock_branch_resolves_current_branch(self, initialized_project):
+        """lock_branch(None) locks and yields the current branch"""
+        storage = initialized_project
+        storage.create_branch("develop")
+        storage.switch_branch("develop")
+        with storage.lock_branch() as branch:
+            assert branch == "develop"
+            storage.add_intent("On develop", "inside lock")
+        assert len(storage.load_intents("develop")) == 1
+        assert storage.load_intents("main") == []
+
+    @pytest.mark.skipif(LOCK_BACKEND == "none", reason="fallback backend removes its lock file")
+    def test_lock_sidecar_is_not_listed_as_branch(self, initialized_project):
+        """Locks live on '<file>.lock' sidecars that list_branches() ignores"""
+        storage = initialized_project
+        storage.create_branch("feature")
+        storage.add_intent("On feature", "sidecar test", branch="feature")
+        storage.add_intent("On main", "sidecar test")
+
+        assert (storage.branches_dir / "feature.json.lock").is_file()
+        assert (storage.intentlog_dir / "intents.json.lock").is_file()
+        assert storage.list_branches() == ["feature", "main"]
+        # The data file itself is still the only thing read back
+        with open(storage.branches_dir / "feature.json") as f:
+            assert len(json.load(f)["intents"]) == 1
+
+    def test_gitignore_excludes_lock_files(self, initialized_project):
+        """init writes '*.lock' into .intentlog/.gitignore"""
+        gitignore = initialized_project.intentlog_dir / ".gitignore"
+        assert "*.lock" in gitignore.read_text().splitlines()

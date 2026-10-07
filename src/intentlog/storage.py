@@ -15,9 +15,10 @@ import json
 import os
 import hashlib
 import tempfile
+from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime
-from typing import Optional, Dict, Any, List, Tuple, TYPE_CHECKING
+from typing import Optional, Dict, Any, List, Tuple, Iterator, TYPE_CHECKING
 from dataclasses import dataclass, field
 
 from .core import Intent, IntentLog
@@ -236,6 +237,9 @@ class IntentLogStorage:
             └── experiment.json
     """
 
+    #: Seconds to wait for a branch lock before raising FileLockTimeout.
+    lock_timeout: float = 10.0
+
     def __init__(self, project_path: Optional[Path] = None):
         """
         Initialize storage for a project.
@@ -262,15 +266,64 @@ class IntentLogStorage:
             return self.intentlog_dir / INTENTS_FILE
         return self.branches_dir / f"{branch_name}.json"
 
+    def _get_lock_file(self, file_path: Path) -> Path:
+        """
+        Get the lock sidecar path ('<file>.lock') for a data file.
+
+        The lock is taken on a stable sidecar rather than on the data file:
+        _atomic_write_json() replaces the data file with os.replace(), which
+        would leave existing lock holders attached to an unlinked inode while
+        new lockers open the replacement, so locks on the data file itself do
+        not serialize writers. The '.lock' suffix keeps sidecars out of
+        list_branches(), which only accepts '.json' files.
+        """
+        return Path(str(file_path) + ".lock")
+
     def _lock_file(self, file_path: Path, exclusive: bool = True):
         """
         Context manager for file locking.
 
         Uses cross-platform file locking to prevent concurrent writes.
         Works on Unix (fcntl), Windows (msvcrt), and falls back to lock files.
+        Locks are re-entrant within a thread (see filelock.FileLock).
         """
         from .filelock import FileLock
-        return FileLock(file_path, exclusive=exclusive)
+        return FileLock(
+            self._get_lock_file(file_path),
+            exclusive=exclusive,
+            timeout=self.lock_timeout,
+        )
+
+    @contextmanager
+    def lock_branch(self, branch: Optional[str] = None) -> Iterator[str]:
+        """
+        Hold an exclusive lock on a branch for a read-modify-write sequence.
+
+        Use this around any load -> mutate -> save sequence so that no other
+        thread or process can interleave its own write and cause a lost
+        update. The lock is re-entrant within the current thread, so
+        load_intents(), save_intents(), add_intent() and the chained
+        variants can be called freely inside the block without deadlocking.
+
+        Args:
+            branch: Branch to lock. If None, uses current branch.
+
+        Yields:
+            The name of the locked branch (resolved from config when None).
+
+        Raises:
+            ProjectNotFoundError: If project not initialized and branch is None
+            FileLockTimeout: If the lock cannot be acquired within lock_timeout
+
+        Usage:
+            with storage.lock_branch() as branch:
+                intents = storage.load_intents(branch)
+                intents.append(new_intent)
+                storage.save_intents(intents, branch)
+        """
+        branch = branch or self.load_config().current_branch
+        with self._lock_file(self._get_branch_file(branch), exclusive=True):
+            yield branch
 
     def is_initialized(self) -> bool:
         """Check if project is initialized"""
@@ -335,6 +388,7 @@ class IntentLogStorage:
             f.write("violations.jsonl\n")
             f.write("network_audit.jsonl\n")
             f.write("temp/\n")
+            f.write("*.lock\n")
 
         logger.info("Project initialized successfully", project=project_name)
         return config
@@ -475,9 +529,12 @@ class IntentLogStorage:
             raise ValueError("Intent must have name and non-empty reasoning")
 
         with log_context(intent_id=intent.intent_id, branch=branch, operation="add_intent"):
-            intents = self.load_intents(branch)
-            intents.append(intent)
-            self.save_intents(intents, branch)
+            # Hold one exclusive lock across load + append + save so that
+            # concurrent writers cannot both read N intents and write N+1.
+            with self.lock_branch(branch) as locked_branch:
+                intents = self.load_intents(locked_branch)
+                intents.append(intent)
+                self.save_intents(intents, locked_branch)
             logger.info("Added intent", name=name[:50], intent_id=intent.intent_id[:12])
 
         return intent
@@ -503,35 +560,39 @@ class IntentLogStorage:
         from_branch = from_branch or config.current_branch
 
         new_branch_file = self._get_branch_file(branch_name)
-        if new_branch_file.is_file():
-            logger.debug("Branch already exists", branch=branch_name)
-            raise BranchExistsError(f"Branch '{branch_name}' already exists")
 
-        logger.info("Creating branch", branch=branch_name, from_branch=from_branch)
+        # Lock the new branch so the exists-check and the create are atomic
+        # with respect to concurrent create_branch/add_intent on that name.
+        with self.lock_branch(branch_name):
+            if new_branch_file.is_file():
+                logger.debug("Branch already exists", branch=branch_name)
+                raise BranchExistsError(f"Branch '{branch_name}' already exists")
 
-        # Copy intents from source branch
-        intents = self.load_intents(from_branch)
+            logger.info("Creating branch", branch=branch_name, from_branch=from_branch)
 
-        # Create new branch file
-        data = {
-            "branch": branch_name,
-            "created_from": from_branch,
-            "created_at": datetime.now().isoformat(),
-            "intents": [
-                {
-                    "intent_id": i.intent_id,
-                    "intent_name": i.intent_name,
-                    "intent_reasoning": i.intent_reasoning,
-                    "timestamp": i.timestamp.isoformat() if isinstance(i.timestamp, datetime) else i.timestamp,
-                    "metadata": i.metadata,
-                    "parent_intent_id": i.parent_intent_id,
-                    "hash": compute_intent_hash(i),
-                }
-                for i in intents
-            ],
-        }
+            # Copy intents from source branch
+            intents = self.load_intents(from_branch)
 
-        _atomic_write_json(new_branch_file, data)
+            # Create new branch file
+            data = {
+                "branch": branch_name,
+                "created_from": from_branch,
+                "created_at": datetime.now().isoformat(),
+                "intents": [
+                    {
+                        "intent_id": i.intent_id,
+                        "intent_name": i.intent_name,
+                        "intent_reasoning": i.intent_reasoning,
+                        "timestamp": i.timestamp.isoformat() if isinstance(i.timestamp, datetime) else i.timestamp,
+                        "metadata": i.metadata,
+                        "parent_intent_id": i.parent_intent_id,
+                        "hash": compute_intent_hash(i),
+                    }
+                    for i in intents
+                ],
+            }
+
+            _atomic_write_json(new_branch_file, data)
 
         logger.info("Branch created", branch=branch_name, intents_copied=len(intents))
 
@@ -762,19 +823,22 @@ class IntentLogStorage:
         if not intent.validate():
             raise ValueError("Intent must have name and non-empty reasoning")
 
-        # Load existing chain
-        chained_intents = self.load_chained_intents(branch)
+        # Hold one exclusive lock across load + append + save so that
+        # concurrent writers cannot build two chains from the same prev_hash.
+        with self.lock_branch(branch) as locked_branch:
+            # Load existing chain
+            chained_intents = self.load_chained_intents(locked_branch)
 
-        # Append to chain
-        new_chained = append_to_chain(chained_intents, intent)
+            # Append to chain
+            new_chained = append_to_chain(chained_intents, intent)
 
-        # Sign if requested
-        if sign:
-            signature = self._sign_chained_intent(new_chained, key_password)
-            new_chained.signature = signature
+            # Sign if requested
+            if sign:
+                signature = self._sign_chained_intent(new_chained, key_password)
+                new_chained.signature = signature
 
-        chained_intents.append(new_chained)
-        self.save_chained_intents(chained_intents, branch)
+            chained_intents.append(new_chained)
+            self.save_chained_intents(chained_intents, locked_branch)
 
         return new_chained
 
@@ -869,16 +933,17 @@ class IntentLogStorage:
         """
         from .merkle import chain_intents
 
-        # Load plain intents
-        intents = self.load_intents(branch)
-        if not intents:
-            return 0
+        with self.lock_branch(branch) as locked_branch:
+            # Load plain intents
+            intents = self.load_intents(locked_branch)
+            if not intents:
+                return 0
 
-        # Chain them
-        chained = chain_intents(intents)
+            # Chain them
+            chained = chain_intents(intents)
 
-        # Save with chain data
-        self.save_chained_intents(chained, branch)
+            # Save with chain data
+            self.save_chained_intents(chained, locked_branch)
 
         return len(chained)
 

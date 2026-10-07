@@ -240,6 +240,7 @@ class TestConcurrentWrites:
             operation=create_intent,
             num_threads=5,
             operations_per_thread=20,
+            warmup_operations=0,  # warm-up adds persist too; keep the count exact
         )
 
         print(result.summary())
@@ -429,6 +430,7 @@ class TestFileLocking:
             operation=write_with_verification,
             num_threads=8,
             operations_per_thread=25,
+            warmup_operations=0,  # warm-up adds persist too; keep the count exact
         )
 
         print(result.summary())
