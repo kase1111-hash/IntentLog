@@ -600,3 +600,33 @@ class TestRestoreKeepsKeysAndRollsBack:
 
         assert not target.exists() or not any(target.iterdir())
 
+    def test_rotated_key_is_reported_when_backup_has_keys(self, manager, project):
+        key = self._add_key(project)
+        _, metadata = manager.create_backup(include_keys=True)
+        key.write_text("NEW PRIVATE KEY")
+        (key.parent / "default.pub").write_text("NEW PUBLIC KEY")
+
+        result = manager.restore_backup(metadata.backup_id, target_path=project, overwrite=True)
+
+        assert key.read_text() == "PRIVATE KEY"
+        assert any("Did not carry over 1 private key" in w for w in result.warnings)
+        moved = project / f"{INTENTLOG_DIR}.bak" / "keys" / "default.key"
+        assert moved.read_text() == "NEW PRIVATE KEY"
+
+    def test_progress_callback_failure_is_rolled_back(self, manager, project):
+        _, metadata = manager.create_backup()
+        IntentLogStorage(project).add_intent("later", "only in the live project")
+        before = _intent_tuples(project)
+
+        def cancel(message, fraction):
+            if message.startswith("Extracting"):
+                raise KeyboardInterrupt
+
+        with pytest.raises(KeyboardInterrupt):
+            manager.restore_backup(
+                metadata.backup_id, target_path=project, overwrite=True, progress_callback=cancel
+            )
+
+        assert _intent_tuples(project) == before
+        assert not (project / f"{INTENTLOG_DIR}.bak").exists()
+

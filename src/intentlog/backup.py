@@ -571,13 +571,13 @@ class BackupManager:
                 shutil.move(str(target_intentlog), str(backup_existing))
                 warnings.append(f"Existing project backed up to {backup_existing}")
 
-            if progress_callback:
-                progress_callback("Extracting backup...", 0.4)
-
             # Extract archive. Until the restore has fully succeeded, any
             # failure removes what was written and puts the previous project
             # back where it was.
             try:
+                if progress_callback:
+                    progress_callback("Extracting backup...", 0.4)
+
                 target_path.mkdir(parents=True, exist_ok=True)
 
                 mode = "r:gz" if metadata.compression == "gzip" else "r"
@@ -679,6 +679,10 @@ class BackupManager:
             relative = item.relative_to(old_dir)
             dest = new_dir / relative
             if dest.exists():
+                # The backup brought its own copy; report a different one
+                # (for example a key rotated after the backup was taken)
+                if dest.read_bytes() != item.read_bytes():
+                    left.append(relative.as_posix())
                 continue
             old_pub = item.with_suffix(".pub")
             new_pub = dest.with_suffix(".pub")
