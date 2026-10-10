@@ -15,6 +15,9 @@ from pathlib import Path
 import pytest
 
 from intentlog.git import (
+    COMMIT_MSG_HOOK,
+    HOOK_BLOCK_END,
+    HOOK_BLOCK_START,
     HOOK_MARKER,
     detect_git_repo,
     get_git_branch,
@@ -767,7 +770,8 @@ class TestPrepareCommitMsgHook:
         install_hooks(git_repo)
         hook_path = git_repo / ".git" / "hooks" / "prepare-commit-msg"
 
-        original = "subject\n\nbody\n"
+        # Git writes its own '#' help lines when it is about to open an editor
+        original = "subject\n\nbody\n# Please enter the commit message for your changes.\n"
         msg_file = git_repo / "COMMIT_MSG_TEST"
         msg_file.write_text(original)
 
@@ -787,7 +791,8 @@ class TestPrepareCommitMsgHook:
         assert added_lines, "hook should have appended an intent block"
         assert all(line.startswith("#") for line in added_lines)
         assert "Hook intent" in added
-        assert "IntentLog: Latest recorded intent" in added
+        assert added_lines[0] == HOOK_BLOCK_START
+        assert added_lines[-1] == HOOK_BLOCK_END
 
     @pytest.mark.skipif(not _SH_AVAILABLE, reason="sh not available")
     def test_message_source_leaves_file_untouched(self, ilog_in_git):
@@ -924,3 +929,169 @@ class TestPrepareCommitMsgHook:
         stored = _git(git_repo, "log", "-1", "--format=%B").stdout
         assert stored.strip() == "editor subject"
         assert "IntentLog" not in stored
+
+
+# =========================================================================
+# commit-msg companion hook: the stored message never contains the block
+# =========================================================================
+
+
+def _write_editor(path, prefix):
+    """A fake GIT_EDITOR that keeps a copy of what it was shown and prepends text."""
+    path.write_text(
+        "#!/bin/sh\n"
+        'cp "$1" "$1.seen"\n'
+        f"printf '{prefix}\\n' | cat - \"$1\" > \"$1.tmp\" && mv \"$1.tmp\" \"$1\"\n"
+    )
+    path.chmod(0o755)
+    return path
+
+
+def _commit(git_repo, *args, editor=None):
+    env = _hook_env()
+    if editor is not None:
+        env["GIT_EDITOR"] = str(editor)
+    return subprocess.run(
+        ["git", "-c", "commit.gpgsign=false", "commit", "-q"] + list(args),
+        cwd=git_repo,
+        capture_output=True,
+        text=True,
+        env=env,
+    )
+
+
+@pytest.mark.skipif(not (_GIT_AVAILABLE and _SH_AVAILABLE), reason="git and sh required")
+class TestCommitMsgCompanionHook:
+    """The editor shows the intent block; git never stores it."""
+
+    @pytest.fixture
+    def hooked_repo(self, ilog_in_git):
+        storage, git_repo = ilog_in_git
+        storage.add_chained_intent(name="Hook intent", reasoning="Shown in the editor only")
+        install_hooks(git_repo)
+        (git_repo / "staged.txt").write_text("change\n")
+        _git(git_repo, "add", "staged.txt")
+        return git_repo
+
+    def test_editor_sees_block_but_message_is_clean(self, hooked_repo):
+        editor = _write_editor(hooked_repo / "editor.sh", "Editor subject")
+
+        result = _commit(hooked_repo, editor=editor)
+
+        assert result.returncode == 0, result.stderr
+        seen = (hooked_repo / ".git" / "COMMIT_EDITMSG.seen").read_text()
+        assert HOOK_BLOCK_START in seen and "Hook intent" in seen
+        stored = _git(hooked_repo, "log", "-1", "--format=%B").stdout
+        assert stored.strip() == "Editor subject"
+
+    def test_cleanup_whitespace_flag_does_not_store_block(self, hooked_repo):
+        editor = _write_editor(hooked_repo / "editor.sh", "Editor subject")
+
+        result = _commit(hooked_repo, "--cleanup=whitespace", editor=editor)
+
+        assert result.returncode == 0, result.stderr
+        stored = _git(hooked_repo, "log", "-1", "--format=%B").stdout
+        assert stored.startswith("Editor subject")
+        assert "IntentLog" not in stored
+
+    def test_no_edit_without_message_still_aborts(self, hooked_repo):
+        result = _commit(hooked_repo, "--no-edit")
+
+        assert result.returncode != 0
+        assert _git(hooked_repo, "log", "-1", "--format=%s").stdout.strip() != ""
+        assert "IntentLog" not in _git(hooked_repo, "log", "-1", "--format=%B").stdout
+
+    def test_unedited_template_still_aborts(self, hooked_repo, tmp_path):
+        template = tmp_path / "template.txt"
+        template.write_text("Template line\n")
+
+        result = _commit(hooked_repo, "--no-edit", "-t", str(template))
+
+        assert result.returncode != 0
+        assert "IntentLog" not in _git(hooked_repo, "log", "-1", "--format=%B").stdout
+
+    def test_prepare_hook_is_inert_without_companion(self, hooked_repo):
+        (hooked_repo / ".git" / "hooks" / "commit-msg").unlink()
+        msg_file = hooked_repo / "MSG"
+        original = b"subject\n# Please enter the commit message for your changes.\n"
+        msg_file.write_bytes(original)
+
+        hook = hooked_repo / ".git" / "hooks" / "prepare-commit-msg"
+        result = subprocess.run(
+            ["sh", str(hook), str(msg_file), ""],
+            cwd=hooked_repo, capture_output=True, text=True, env=_hook_env(),
+        )
+
+        assert result.returncode == 0, result.stderr
+        assert msg_file.read_bytes() == original
+
+    @pytest.mark.parametrize(
+        "message, expected",
+        [
+            # The block is removed, everything else stays
+            (
+                f"subject\n\nbody\n{HOOK_BLOCK_START}\n# intent line\n{HOOK_BLOCK_END}\n",
+                "subject\n\nbody\n",
+            ),
+            # Missing end marker: leave everything alone
+            (
+                f"subject\n{HOOK_BLOCK_START}\n# intent line\nuser text\n",
+                f"subject\n{HOOK_BLOCK_START}\n# intent line\nuser text\n",
+            ),
+            # A non-comment line inside the block: leave it alone
+            (
+                f"subject\n{HOOK_BLOCK_START}\nuser text\n{HOOK_BLOCK_END}\n",
+                f"subject\n{HOOK_BLOCK_START}\nuser text\n{HOOK_BLOCK_END}\n",
+            ),
+            # No block at all
+            ("subject\n", "subject\n"),
+        ],
+    )
+    def test_commit_msg_hook_strips_only_the_marked_block(self, tmp_path, message, expected):
+        hook = tmp_path / "commit-msg"
+        hook.write_text(COMMIT_MSG_HOOK)
+        msg_file = tmp_path / "MSG"
+        msg_file.write_text(message)
+
+        result = subprocess.run(["sh", str(hook), str(msg_file)], capture_output=True, text=True)
+
+        assert result.returncode == 0, result.stderr
+        assert msg_file.read_text() == expected
+        assert not list(tmp_path.glob("MSG.intentlog.*"))
+
+
+class TestCompanionHookManagement:
+    def test_install_writes_both_hooks(self, git_repo):
+        installed = install_hooks(git_repo)
+
+        assert installed == ["commit-msg", "prepare-commit-msg"]
+        status = hooks_status(git_repo)
+        assert status["prepare-commit-msg"] == "installed"
+        assert status["commit-msg"] == "installed"
+
+    def test_foreign_commit_msg_blocks_install(self, git_repo):
+        hook_path = git_repo / ".git" / "hooks" / "commit-msg"
+        hook_path.write_text("#!/bin/sh\n# my hook\n")
+
+        assert install_hooks(git_repo) == []
+        assert not (git_repo / ".git" / "hooks" / "prepare-commit-msg").exists()
+        assert hooks_status(git_repo)["commit-msg"] == "foreign"
+
+    def test_outdated_hook_is_reported_and_updated(self, git_repo):
+        hook_path = git_repo / ".git" / "hooks" / "prepare-commit-msg"
+        hook_path.write_text(f"#!/bin/sh\n{HOOK_MARKER}\nintentlog log --limit 1 --json\n")
+
+        assert hooks_status(git_repo)["prepare-commit-msg"] == "outdated"
+        assert "prepare-commit-msg (updated)" in install_hooks(git_repo)
+        assert hooks_status(git_repo)["prepare-commit-msg"] == "installed"
+
+    def test_uninstall_removes_both_hooks(self, git_repo):
+        install_hooks(git_repo)
+
+        removed = uninstall_hooks(git_repo)
+
+        assert set(removed) == {"prepare-commit-msg", "commit-msg"}
+        status = hooks_status(git_repo)
+        assert status["prepare-commit-msg"] == "not installed"
+        assert status["commit-msg"] == "not installed"
+

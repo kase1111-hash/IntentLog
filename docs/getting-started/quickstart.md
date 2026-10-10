@@ -77,7 +77,7 @@ ilog status
 # See reasoning for a file's git history
 ilog blame src/auth.py
 
-# Install git hooks (prompts for intent on git commit)
+# Install git hooks (shows the latest intent in the commit message editor)
 ilog hooks install
 ```
 

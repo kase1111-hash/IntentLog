@@ -73,7 +73,7 @@ ilog status
 | `ilog diff <spec>` | Compare branches |
 | `ilog merge <branch>` | Merge intent branches |
 | `ilog blame <file>` | Show intent reasoning for a file's git history |
-| `ilog hooks install` | Install git hooks (prepare-commit-msg) |
+| `ilog hooks install` | Show the latest intent in the commit editor (prepare-commit-msg and commit-msg hooks) |
 | `ilog config` | Configure settings |
 
 All commands support `--json` for scripting where applicable.
