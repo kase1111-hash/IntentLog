@@ -1087,6 +1087,28 @@ class TestUnreadableLegacyEntries:
 
         assert path.read_text() == before
 
+    def test_first_chained_commit_refuses_to_drop_unreadable_entry(self, initialized_project):
+        storage = initialized_project
+        broken = self._entry("broken")
+        del broken["timestamp"]
+        path = self._legacy_branch(storage, [self._entry("a"), broken])
+        before = path.read_text()
+
+        with pytest.raises(ChainIntegrityError, match="migrate --force"):
+            storage.add_chained_intent("b", "first chained commit")
+        assert path.read_text() == before
+
+        storage.migrate_to_chain(force=True)
+        storage.add_chained_intent("b", "works after the explicit repair")
+        assert storage.verify_chain().valid
+
+    @pytest.mark.parametrize("value", ["2024-06-30Z", "20240630Z", "2024-W01-1Z"])
+    def test_date_only_z_values_stay_unreadable(self, value):
+        from intentlog.storage import _parse_datetime
+
+        with pytest.raises(ValueError):
+            _parse_datetime(value)
+
     def test_utc_z_timestamps_are_readable_on_every_python(self, initialized_project):
         storage = initialized_project
         self._legacy_branch(storage, [self._entry("a", "2024-01-01T10:00:00Z")])

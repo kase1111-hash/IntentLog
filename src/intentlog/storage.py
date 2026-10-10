@@ -66,11 +66,16 @@ def _parse_datetime(value: str, field_name: str = "timestamp") -> datetime:
         ValueError: If the datetime string is invalid
     """
     try:
-        if isinstance(value, str) and value.endswith("Z"):
-            # Python < 3.11 rejects the 'Z' UTC suffix that 3.11+ accepts
-            value = value[:-1] + "+00:00"
         return datetime.fromisoformat(value)
     except (ValueError, TypeError) as e:
+        # Python < 3.11 rejects a 'Z' UTC suffix on a date-and-time value,
+        # which 3.11+ accepts. Map only that case, so a value is readable on
+        # every supported Python exactly when it is readable on 3.11+.
+        if isinstance(value, str) and value.endswith("Z") and len(value) > 11 and value[10] in "T ":
+            try:
+                return datetime.fromisoformat(value[:-1] + "+00:00")
+            except ValueError:
+                pass
         raise ValueError(f"Invalid {field_name} format '{value}': {e}") from e
 
 # Lazy imports to avoid circular dependencies
@@ -1128,6 +1133,21 @@ class IntentLogStorage:
         # Hold one exclusive lock across load + append + save so that
         # concurrent writers cannot build two chains from the same prev_hash.
         with self.lock_branch(branch) as locked_branch:
+            # A legacy branch is chained on its first chained commit; that
+            # rewrite must not drop entries that cannot be read
+            existing = self._read_branch_data(self._get_branch_file(locked_branch))
+            if not _is_chained_data(existing):
+                unreadable = [
+                    i for i, entry in enumerate(existing.get("intents", []))
+                    if not _readable_as_intent(entry)
+                ]
+                if unreadable:
+                    raise ChainIntegrityError(
+                        f"Branch '{locked_branch}' has an unreadable entry at position "
+                        f"{unreadable[0]}; committing would drop it. Fix the entry, or run "
+                        "'ilog chain migrate --force' to drop it explicitly"
+                    )
+
             # Load existing chain
             chained_intents = self.load_chained_intents(locked_branch)
             damaged = [c.sequence for c in chained_intents if not c.chain_hash]

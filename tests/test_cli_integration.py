@@ -703,6 +703,11 @@ class TestUnreadableLegacyCli:
         assert "--force" in result.stdout
         assert intents_file.read_text() == before
 
+        result = run_ilog("commit", "new work")
+        assert result.returncode == 1
+        assert "migrate --force" in result.stdout
+        assert intents_file.read_text() == before
+
 
 class TestTagNoOp:
     def test_removing_absent_tag_rewrites_nothing(self, temp_project_dir):
