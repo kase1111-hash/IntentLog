@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ilog tag` no longer rewrites an intent when no tag changed.
 - `ilog chain verify` reports entries whose chain data was removed or cannot be read, including the first entry, instead of crashing or re-hashing the branch as if it had never been chained. `ilog commit` and `IntentLogStorage.add_intent()` refuse to append to such a branch, and `ilog chain migrate --force` rebuilds the chain from the first damaged entry, even when no entry is readable.
 - Branch names are validated on every storage path, so no branch name or `config.json` value can address a file outside `.intentlog/`.
+- Entries that cannot be read are never dropped silently. `ilog chain migrate`, `tag`, `link`, `merge` and `add_intent()` refuse to rewrite a branch that would lose them, on chained and legacy branches alike, unless forced.
+- Timestamps with a `Z` UTC suffix are read on Python 3.8-3.10 as they are on 3.11+.
 - `mkdocs build --strict` passes again, and the API reference only lists members that exist. The `docs` extra allows mkdocstrings 1.x, which works with current pymdown-extensions.
 - `examples/basic_usage.py`, `benchmarks/run_benchmarks.py` and the pytest-benchmark suite run against the v0.2.0 API.
 - `MANIFEST.in` no longer lists files that were deleted, and `setup.py` defers all metadata to `pyproject.toml`.

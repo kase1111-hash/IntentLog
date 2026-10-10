@@ -66,6 +66,9 @@ def _parse_datetime(value: str, field_name: str = "timestamp") -> datetime:
         ValueError: If the datetime string is invalid
     """
     try:
+        if isinstance(value, str) and value.endswith("Z"):
+            # Python < 3.11 rejects the 'Z' UTC suffix that 3.11+ accepts
+            value = value[:-1] + "+00:00"
         return datetime.fromisoformat(value)
     except (ValueError, TypeError) as e:
         raise ValueError(f"Invalid {field_name} format '{value}': {e}") from e
@@ -258,6 +261,18 @@ def _placeholder_intent(entry: Dict[str, Any]) -> Intent:
         metadata=metadata if isinstance(metadata, dict) else {},
         parent_intent_id=parent if isinstance(parent, str) else None,
     )
+
+
+def _readable_as_intent(entry: Any) -> bool:
+    """True if load_intents() can read this stored entry."""
+    if not isinstance(entry, dict):
+        return False
+    try:
+        entry["intent_id"], entry["intent_name"], entry["intent_reasoning"]
+        _parse_datetime(entry["timestamp"])
+        return True
+    except (KeyError, ValueError, TypeError):
+        return False
 
 
 def _is_chained_data(data: Dict[str, Any]) -> bool:
@@ -578,6 +593,19 @@ class IntentLogStorage:
                 self.save_chained_intents(chained, branch)
                 return removed
 
+            unreadable = [
+                i for i, entry in enumerate(existing.get("intents", []))
+                if not _readable_as_intent(entry)
+            ]
+            if unreadable:
+                message = (
+                    f"Branch '{branch}' has an unreadable entry at position {unreadable[0]}; "
+                    "saving would drop it"
+                )
+                if strict:
+                    raise ChainIntegrityError(message)
+                get_logger().warning(message)
+
             data = {
                 "branch": branch,
                 "intents": [
@@ -674,23 +702,38 @@ class IntentLogStorage:
         # Stored entries from `keep` on are about to be replaced.
         branch_is_chained = _is_chained_data(existing)
         broken_at = None
+        message = ""
         for i in range(keep, len(raw_entries)):
-            if not isinstance(raw_entries[i], dict) or "chain_hash" not in raw_entries[i]:
+            raw = raw_entries[i]
+            if not isinstance(raw, dict) or "chain_hash" not in raw:
                 if branch_is_chained:
                     # On a chained branch every entry must carry chain data;
                     # a missing one means it was stripped by hand.
                     broken_at = i
+                    message = (
+                        f"Branch '{branch}' fails chain verification at position {i}; "
+                        "rewriting it would hide the break. Run 'ilog chain verify' for details"
+                    )
                     break
-                continue  # legacy plain branch: nothing to verify
+                if not _readable_as_intent(raw):
+                    # Legacy plain branch: an entry that cannot be read would
+                    # be dropped by the rewrite
+                    broken_at = i
+                    message = (
+                        f"Branch '{branch}' has an unreadable entry at position {i}; "
+                        "rewriting the branch would drop it"
+                    )
+                    break
+                continue
             if i >= len(stored) or not entry_verifies(i):
                 broken_at = i
+                message = (
+                    f"Branch '{branch}' fails chain verification at position {i}; "
+                    "rewriting it would hide the break. Run 'ilog chain verify' for details"
+                )
                 break
 
         if broken_at is not None:
-            message = (
-                f"Branch '{branch}' fails chain verification at position {broken_at}; "
-                "rewriting it would hide the break. Run 'ilog chain verify' for details"
-            )
             if strict:
                 raise ChainIntegrityError(message)
             logger.warning(message)
@@ -1193,8 +1236,9 @@ class IntentLogStorage:
 
         Chain data already stored is kept as it is. If part of the stored
         chain would have to be rewritten because it is unreadable or was
-        stripped, the migration is refused unless forced, because the rewrite
-        would hide that damage from 'ilog chain verify'.
+        stripped, or a legacy entry cannot be read and would be dropped, the
+        migration is refused unless forced, because the rewrite would hide
+        that damage or lose that entry.
 
         Args:
             branch: Branch to migrate. If None, uses current branch.

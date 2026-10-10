@@ -1033,6 +1033,71 @@ class TestRepairPaths:
         assert storage.verify_chain().valid
 
 
+class TestUnreadableLegacyEntries:
+    """On a branch without chain data, unreadable entries are never dropped silently."""
+
+    @staticmethod
+    def _legacy_branch(storage, entries):
+        path = storage._get_branch_file("main")
+        path.write_text(json.dumps({"branch": "main", "intents": entries}, indent=2))
+        return path
+
+    @staticmethod
+    def _entry(name, timestamp="2024-01-01T10:00:00"):
+        return {
+            "intent_id": f"id-{name}",
+            "intent_name": name,
+            "intent_reasoning": f"reasoning {name}",
+            "timestamp": timestamp,
+            "metadata": {},
+        }
+
+    def test_migrate_refuses_to_drop_unreadable_entries(self, initialized_project):
+        storage = initialized_project
+        broken = self._entry("broken")
+        del broken["timestamp"]
+        path = self._legacy_branch(storage, [broken])
+        before = path.read_text()
+
+        with pytest.raises(ChainIntegrityError, match="unreadable entry at position 0"):
+            storage.migrate_to_chain()
+        assert path.read_text() == before
+
+        assert storage.migrate_to_chain(force=True) == 0
+        assert storage.verify_chain().valid
+
+    def test_migrate_of_readable_legacy_branch_still_works(self, initialized_project):
+        storage = initialized_project
+        self._legacy_branch(storage, [self._entry("a"), self._entry("b")])
+
+        assert storage.migrate_to_chain() == 2
+        assert storage.verify_chain().valid
+
+    def test_strict_save_refuses_to_drop_unreadable_entry(self, initialized_project):
+        storage = initialized_project
+        path = self._legacy_branch(storage, [self._entry("a"), None])
+        before = path.read_text()
+
+        intents = storage.load_intents()
+        intents[0].metadata["tags"] = ["x"]
+        with pytest.raises(ChainIntegrityError, match="unreadable entry at position 1"):
+            storage.save_intents(intents, strict=True)
+        with pytest.raises(ChainIntegrityError):
+            storage.add_intent("b", "plain append")
+
+        assert path.read_text() == before
+
+    def test_utc_z_timestamps_are_readable_on_every_python(self, initialized_project):
+        storage = initialized_project
+        self._legacy_branch(storage, [self._entry("a", "2024-01-01T10:00:00Z")])
+
+        intents = storage.load_intents()
+
+        assert len(intents) == 1
+        assert intents[0].timestamp.utcoffset().total_seconds() == 0
+        assert storage.migrate_to_chain() == 1
+
+
 class TestBranchNamesOnEveryPath:
     @pytest.mark.parametrize("name", ["../escape", "../../x", "a/b", "bad name"])
     def test_invalid_names_are_not_found_and_create_nothing(self, initialized_project, name):

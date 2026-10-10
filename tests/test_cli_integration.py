@@ -679,6 +679,31 @@ class TestRepairAllUnreadable:
         assert run_ilog("commit", "works again").returncode == 0
 
 
+class TestUnreadableLegacyCli:
+    def test_migrate_and_tag_keep_unreadable_legacy_entries(self, temp_project_dir):
+        run_ilog("init", "test-project")
+        intents_file = temp_project_dir / ".intentlog" / "intents.json"
+        entries = [
+            {"intent_id": "id-a", "intent_name": "a", "intent_reasoning": "readable",
+             "timestamp": "2024-01-01T10:00:00", "metadata": {}},
+            {"intent_id": "id-b", "intent_name": "b", "intent_reasoning": "no timestamp",
+             "metadata": {}},
+        ]
+        with open(intents_file, "w") as f:
+            json.dump({"branch": "main", "intents": entries}, f)
+        before = intents_file.read_text()
+
+        result = run_ilog("chain", "migrate")
+        assert result.returncode == 1
+        assert "unreadable entry at position 1" in result.stdout
+        assert intents_file.read_text() == before
+
+        result = run_ilog("tag", "id-a", "x")
+        assert result.returncode == 1
+        assert "--force" in result.stdout
+        assert intents_file.read_text() == before
+
+
 class TestTagNoOp:
     def test_removing_absent_tag_rewrites_nothing(self, temp_project_dir):
         run_ilog("init", "test-project")
