@@ -843,6 +843,86 @@ class TestStrippedChainEntries:
         assert storage.verify_chain().valid
 
 
+def _strip(storage, index, branch="main"):
+    path = storage._get_branch_file(branch)
+    data = json.loads(path.read_text())
+    for key in ("intent_hash", "prev_hash", "chain_hash", "sequence", "signature"):
+        data["intents"][index].pop(key, None)
+    path.write_text(json.dumps(data, indent=2))
+
+
+class TestStrippedFirstEntry:
+    """Stripping the first entry must not turn the branch back into 'legacy'."""
+
+    def test_verify_reports_stripped_first_entry(self, initialized_project):
+        storage = initialized_project
+        for name in "abc":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        _strip(storage, 0)
+        _tamper(storage, 2)
+
+        result = storage.verify_chain()
+
+        assert not result.valid
+        assert result.broken_at == 0
+
+    def test_commit_on_stripped_branch_is_refused(self, initialized_project):
+        storage = initialized_project
+        for name in "ab":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        _strip(storage, 0)
+        before = _branch_data(storage)
+
+        with pytest.raises(ChainIntegrityError, match="migrate --force"):
+            storage.add_chained_intent("c", "appended to a damaged branch")
+
+        assert _branch_data(storage) == before
+
+    def test_migrate_force_repairs_stripped_and_empty_entries(self, initialized_project):
+        storage = initialized_project
+        for name in "abc":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        path = storage._get_branch_file("main")
+        data = json.loads(path.read_text())
+        data["intents"][1]["chain_hash"] = ""  # as an older build could persist
+        path.write_text(json.dumps(data, indent=2))
+        _strip(storage, 2)
+
+        assert storage.migrate_to_chain(force=True) == 3
+
+        assert storage.verify_chain().valid
+        assert all(e["chain_hash"] for e in _branch_data(storage)["intents"])
+
+    def test_branch_copy_of_damaged_chain_stays_repairable(self, initialized_project):
+        storage = initialized_project
+        for name in "abc":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        _strip(storage, 1)
+
+        storage.create_branch("copy")
+
+        assert _branch_data(storage, "copy")["intents"] == _branch_data(storage)["intents"]
+        assert not storage.verify_chain("copy").valid
+        storage.migrate_to_chain("copy", force=True)
+        assert storage.verify_chain("copy").valid
+
+
+class TestBranchNamesOnEveryPath:
+    @pytest.mark.parametrize("name", ["../escape", "../../x", "a/b", "bad name"])
+    def test_invalid_names_are_not_found_and_create_nothing(self, initialized_project, name):
+        storage = initialized_project
+        root = storage.intentlog_dir.parent
+        before = sorted(str(p) for p in root.parent.glob("*"))
+
+        with pytest.raises(BranchNotFoundError):
+            storage.load_intents(name)
+        with pytest.raises(BranchNotFoundError):
+            storage.save_intents([], name)
+
+        assert sorted(str(p) for p in root.parent.glob("*")) == before
+        assert not list((storage.intentlog_dir / "temp").rglob("*escape*"))
+
+
 @pytest.mark.skipif(not CRYPTO_AVAILABLE, reason="cryptography not installed")
 class TestSignedChainPreservation:
     """Signatures survive every write that does not change their intents."""

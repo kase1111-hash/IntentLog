@@ -23,7 +23,7 @@ from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Tuple
 
 from .core import Intent
 from .logging import get_logger, log_context
-from .validation import validate_branch_name, validate_project_name
+from .validation import ValidationError, validate_branch_name, validate_project_name
 
 logger = get_logger(__name__)
 
@@ -289,7 +289,18 @@ class IntentLogStorage:
         self.branches_dir = self.intentlog_dir / BRANCHES_DIR
 
     def _get_branch_file(self, branch_name: str) -> Path:
-        """Get the path to a branch's intent file"""
+        """
+        Get the path to a branch's intent file.
+
+        Raises:
+            BranchNotFoundError: If the name is not a valid branch name, so a
+                traversal-style name can never address a file outside
+                .intentlog/
+        """
+        try:
+            validate_branch_name(branch_name)
+        except ValidationError as e:
+            raise BranchNotFoundError(f"Branch '{branch_name}' not found") from e
         if branch_name == "main":
             return self.intentlog_dir / INTENTS_FILE
         return self.branches_dir / f"{branch_name}.json"
@@ -307,6 +318,8 @@ class IntentLogStorage:
         untracked files.
         """
         relative = Path(file_path).relative_to(self.intentlog_dir)
+        if ".." in relative.parts:
+            raise StorageError(f"Refusing to lock a path outside {INTENTLOG_DIR}/: {file_path}")
         return self.intentlog_dir / "temp" / "locks" / relative.parent / (relative.name + ".lock")
 
     def _lock_file(self, file_path: Path, exclusive: bool = True):
@@ -580,6 +593,7 @@ class IntentLogStorage:
         existing: Dict[str, Any],
         intents: List[Intent],
         strict: bool = False,
+        repair: bool = False,
     ) -> Tuple[List["ChainedIntent"], int]:
         """
         Build the chain for ``intents`` while keeping the stored chain intact.
@@ -589,6 +603,9 @@ class IntentLogStorage:
         on, intents are re-chained. Stored entries are kept even if they fail
         verification, so a write never hides tampering; a rewrite that would
         replace such entries is reported instead.
+
+        With ``repair``, stored entries are only kept up to the first one that
+        fails verification; the chain is rebuilt from there.
 
         Returns:
             (chain, number of signatures removed by the rewrite)
@@ -615,6 +632,16 @@ class IntentLogStorage:
             except (KeyError, ValueError, TypeError):
                 break
 
+        def entry_verifies(i: int) -> bool:
+            cur = stored[i]
+            expected_prev = stored[i - 1].chain_hash if i > 0 else GENESIS_HASH
+            return (
+                bool(cur.chain_hash)
+                and compute_intent_content_hash(cur.intent) == cur.intent_hash
+                and cur.prev_hash == expected_prev
+                and compute_chain_hash(cur.intent_hash, cur.prev_hash) == cur.chain_hash
+            )
+
         keep = 0
         while (
             keep < len(intents)
@@ -622,6 +649,7 @@ class IntentLogStorage:
             and stored[keep].intent.intent_id == intents[keep].intent_id
             and compute_intent_content_hash(stored[keep].intent)
             == compute_intent_content_hash(intents[keep])
+            and (not repair or entry_verifies(keep))
         ):
             keep += 1
 
@@ -636,16 +664,7 @@ class IntentLogStorage:
                     broken_at = i
                     break
                 continue  # legacy plain branch: nothing to verify
-            if i >= len(stored):
-                broken_at = i
-                break
-            cur = stored[i]
-            expected_prev = stored[i - 1].chain_hash if i > 0 else GENESIS_HASH
-            if (
-                compute_intent_content_hash(cur.intent) != cur.intent_hash
-                or cur.prev_hash != expected_prev
-                or compute_chain_hash(cur.intent_hash, cur.prev_hash) != cur.chain_hash
-            ):
+            if i >= len(stored) or not entry_verifies(i):
                 broken_at = i
                 break
 
@@ -759,13 +778,11 @@ class IntentLogStorage:
             source = self._read_branch_data(self._get_branch_file(from_branch))
             if _is_chained_data(source):
                 # Keep chain links and signatures: the new branch starts as an
-                # exact copy of the source chain.
-                from .merkle import compute_root_hash
-
-                chained = self.load_chained_intents(from_branch)
-                data["chain_version"] = "1.0"
-                data["root_hash"] = compute_root_hash(chained)
-                data["intents"] = [c.to_dict() for c in chained]
+                # exact copy of the stored source chain, damage included.
+                for key in ("chain_version", "root_hash"):
+                    if key in source:
+                        data[key] = source[key]
+                data["intents"] = list(source.get("intents", []))
             else:
                 data["intents"] = [
                     {
@@ -938,19 +955,19 @@ class IntentLogStorage:
                 logger.warning(f"Skipping invalid chained intent data: {e}")
                 continue
 
-        # If any items are plain Intent, rebuild the chain
-        if chained and isinstance(chained[0], Intent):
-            plain_intents = [c if isinstance(c, Intent) else c.intent for c in chained]
-            chained = chain_intents(plain_intents)
-        elif any(isinstance(c, Intent) for c in chained):
-            # A chained branch with entries whose chain data was removed.
-            # Keep them in place with empty hashes so verification reports
-            # the break instead of failing on the mixed list.
-            chained = [
-                c if not isinstance(c, Intent)
-                else ChainedIntent(intent=c, intent_hash="", prev_hash="", chain_hash="", sequence=i)
-                for i, c in enumerate(chained)
-            ]
+        if any(isinstance(c, Intent) for c in chained):
+            if not _is_chained_data(data):
+                # Legacy branch recorded without chain data: build the chain
+                chained = chain_intents(chained)
+            else:
+                # A chained branch with entries whose chain data was removed.
+                # Keep them in place with empty hashes so verification reports
+                # the break, wherever it is, instead of re-hashing it away.
+                chained = [
+                    c if not isinstance(c, Intent)
+                    else ChainedIntent(intent=c, intent_hash="", prev_hash="", chain_hash="", sequence=i)
+                    for i, c in enumerate(chained)
+                ]
 
         return chained
 
@@ -1025,6 +1042,13 @@ class IntentLogStorage:
         with self.lock_branch(branch) as locked_branch:
             # Load existing chain
             chained_intents = self.load_chained_intents(locked_branch)
+            damaged = [c.sequence for c in chained_intents if not c.chain_hash]
+            if damaged:
+                raise ChainIntegrityError(
+                    f"Branch '{locked_branch}' has entries without chain data "
+                    f"(position {damaged[0]}). Run 'ilog chain verify' for details; "
+                    "'ilog chain migrate --force' rebuilds the chain from that point"
+                )
 
             # Append to chain
             new_chained = append_to_chain(chained_intents, intent)
@@ -1148,7 +1172,7 @@ class IntentLogStorage:
             # Chain them, keeping any chain data (and signatures) already stored
             existing = self._read_branch_data(self._get_branch_file(locked_branch))
             chained, _ = self._rechain_preserving(
-                locked_branch, existing, intents, strict=not force
+                locked_branch, existing, intents, strict=not force, repair=force
             )
 
             # Save with chain data
