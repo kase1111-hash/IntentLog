@@ -242,11 +242,19 @@ class BackupManager:
 
                 for item in intentlog_dir.rglob("*"):
                     if item.is_file():
-                        # Skip private keys unless explicitly requested
-                        if not include_keys and item.suffix in (".key", ".pem"):
-                            if "private" in item.name.lower():
-                                logger.debug(f"Skipping private key: {item.name}")
-                                continue
+                        relative = item.relative_to(intentlog_dir)
+                        # Lock files and other scratch data are not project state
+                        if relative.parts and relative.parts[0] == "temp":
+                            continue
+                        # Skip private keys unless explicitly requested. KeyManager
+                        # stores them as keys/<name>.key; also skip PEM files that
+                        # are named as private keys.
+                        if not include_keys and (
+                            item.suffix == ".key"
+                            or (item.suffix == ".pem" and "private" in item.name.lower())
+                        ):
+                            logger.debug(f"Skipping private key: {item.name}")
+                            continue
 
                         arcname = str(item.relative_to(self.project_path))
                         tar.add(item, arcname=arcname)
@@ -384,6 +392,25 @@ class BackupManager:
         Raises:
             RestoreError: If the member path escapes target_path or is unsafe
         """
+        BackupManager._validate_member(member, target_path)
+        if hasattr(tarfile, "data_filter"):
+            # Also strips setuid/setgid bits and refuses special files
+            tar.extract(member, target_path, filter="data")
+        else:
+            tar.extract(member, target_path)
+
+    @staticmethod
+    def _validate_member(member: tarfile.TarInfo, target_path: Path) -> None:
+        """
+        Check that a tar member is safe to restore into target_path.
+
+        Backups only ever contain the project's .intentlog/ directory, so
+        anything else (or anything that is not a regular file or directory)
+        means the archive was not produced by BackupManager.
+
+        Raises:
+            RestoreError: If the member is unsafe to extract
+        """
         # Reject absolute paths
         if member.name.startswith("/") or member.name.startswith("\\"):
             raise RestoreError(
@@ -403,6 +430,22 @@ class BackupManager:
                 f"Refusing to extract symlink/hardlink: {member.name}"
             )
 
+        # Only regular files and directories belong in a backup
+        if not (member.isfile() or member.isdir()):
+            raise RestoreError(
+                f"Refusing to extract special file: {member.name}"
+            )
+
+        # Only the project's .intentlog/ directory is ever restored
+        normalized = member.name.replace("\\", "/")
+        while normalized.startswith("./"):
+            normalized = normalized[2:]
+        normalized = normalized.rstrip("/")
+        if normalized != INTENTLOG_DIR and not normalized.startswith(INTENTLOG_DIR + "/"):
+            raise RestoreError(
+                f"Refusing to extract member outside {INTENTLOG_DIR}/: {member.name}"
+            )
+
         # Resolve the final extraction path and ensure it stays within target
         extracted_path = (target_path / member.name).resolve()
         target_resolved = target_path.resolve()
@@ -412,8 +455,6 @@ class BackupManager:
             raise RestoreError(
                 f"Member path escapes target directory: {member.name}"
             )
-
-        tar.extract(member, target_path)
 
     def _find_backup_file(self, backup_id: str) -> Optional[Path]:
         """Find the backup archive file for a given backup ID."""
@@ -480,6 +521,18 @@ class BackupManager:
             if progress_callback:
                 progress_callback("Preparing restore...", 0.2)
 
+            # Validate every archive member before touching the target, so a
+            # bad archive never displaces an existing project or leaves a
+            # partial restore behind
+            try:
+                mode = "r:gz" if metadata.compression == "gzip" else "r"
+                with tarfile.open(backup_path, mode) as tar:
+                    for member in tar.getmembers():
+                        if member.name != "backup_metadata.json":
+                            self._validate_member(member, target_path)
+            except tarfile.TarError as e:
+                raise RestoreError(f"Cannot read backup archive: {e}") from e
+
             # Check for existing project
             if target_intentlog.exists():
                 if not overwrite:
@@ -502,11 +555,9 @@ class BackupManager:
 
                 mode = "r:gz" if metadata.compression == "gzip" else "r"
                 with tarfile.open(backup_path, mode) as tar:
-                    # Extract all files except metadata, with path traversal protection
                     for member in tar.getmembers():
-                        if member.name == "backup_metadata.json":
-                            continue
-                        self._safe_extract_member(tar, member, target_path)
+                        if member.name != "backup_metadata.json":
+                            self._safe_extract_member(tar, member, target_path)
 
                 if progress_callback:
                     progress_callback("Verifying restored data...", 0.8)

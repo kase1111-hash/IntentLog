@@ -347,3 +347,109 @@ class TestConvenienceFunctions:
         result = restore_backup(metadata.backup_id, backup_dir=backup_dir, target_path=target)
         assert result.success is True
         assert _intent_tuples(target) == _intent_tuples(project)
+
+
+# ---- Security: secrets stay out, archives stay inside .intentlog/ ----
+
+
+def _archive_names(backup_path):
+    with tarfile.open(backup_path) as tar:
+        return tar.getnames()
+
+
+def _rewrite_archive(backup_path, extra_member_name, data=b"#!/bin/sh\necho pwned\n", kind=tarfile.REGTYPE):
+    """Copy a backup archive and add one extra member (a crafted archive)."""
+    import io
+
+    crafted = backup_path.with_name("crafted.tar.gz")
+    with tarfile.open(backup_path) as src, tarfile.open(crafted, "w:gz") as dst:
+        for member in src.getmembers():
+            dst.addfile(member, src.extractfile(member) if member.isfile() else None)
+        info = tarfile.TarInfo(extra_member_name)
+        info.type = kind
+        if kind == tarfile.REGTYPE:
+            info.size = len(data)
+            dst.addfile(info, io.BytesIO(data))
+        else:
+            dst.addfile(info)
+    crafted.replace(backup_path)
+
+
+class TestBackupSecrets:
+    def test_signing_keys_are_excluded_by_default(self, manager, project):
+        # KeyManager layout: keys/<name>.key (private), .pub, keys.json
+        keys_dir = project / INTENTLOG_DIR / "keys"
+        keys_dir.mkdir()
+        (keys_dir / "default.key").write_text("PRIVATE KEY")
+        (keys_dir / "default.pub").write_text("PUBLIC KEY")
+        (keys_dir / "keys.json").write_text("{}")
+
+        backup_path, _ = manager.create_backup()
+
+        names = _archive_names(backup_path)
+        assert f"{INTENTLOG_DIR}/keys/default.key" not in names
+        assert f"{INTENTLOG_DIR}/keys/default.pub" in names
+        assert f"{INTENTLOG_DIR}/keys/keys.json" in names
+
+    def test_signing_keys_included_when_requested(self, manager, project):
+        keys_dir = project / INTENTLOG_DIR / "keys"
+        keys_dir.mkdir()
+        (keys_dir / "default.key").write_text("PRIVATE KEY")
+
+        backup_path, _ = manager.create_backup(include_keys=True)
+
+        assert f"{INTENTLOG_DIR}/keys/default.key" in _archive_names(backup_path)
+
+    def test_scratch_files_are_not_backed_up(self, manager, project):
+        temp_dir = project / INTENTLOG_DIR / "temp" / "locks"
+        temp_dir.mkdir(parents=True, exist_ok=True)
+        (temp_dir / "intents.json.lock").write_text("")
+
+        backup_path, _ = manager.create_backup()
+
+        assert not any("/temp/" in name for name in _archive_names(backup_path))
+
+
+class TestRestoreScope:
+    @pytest.mark.parametrize(
+        "member_name",
+        [".git/hooks/pre-commit", "src/app.py", "intentlog-not-the-dir/x", "./.gitignore"],
+    )
+    def test_member_outside_intentlog_is_rejected_before_writing(
+        self, manager, tmp_path, member_name
+    ):
+        backup_path, metadata = manager.create_backup()
+        _rewrite_archive(backup_path, member_name)
+        target = tmp_path / "restored"
+
+        with pytest.raises(RestoreError, match="outside"):
+            manager.restore_backup(metadata.backup_id, target_path=target, verify_first=False)
+
+        assert not target.exists() or not any(target.rglob("*"))
+
+    def test_rejected_archive_leaves_existing_project_in_place(self, manager, project):
+        backup_path, metadata = manager.create_backup()
+        _rewrite_archive(backup_path, ".git/hooks/pre-commit")
+        before = _intent_tuples(project)
+
+        with pytest.raises(RestoreError):
+            manager.restore_backup(
+                metadata.backup_id, target_path=project, overwrite=True, verify_first=False
+            )
+
+        assert _intent_tuples(project) == before
+        assert not (project / f"{INTENTLOG_DIR}.bak").exists()
+
+    def test_special_files_are_rejected(self, manager, tmp_path):
+        backup_path, metadata = manager.create_backup()
+        _rewrite_archive(backup_path, f"{INTENTLOG_DIR}/fifo", kind=tarfile.FIFOTYPE)
+
+        with pytest.raises(RestoreError, match="special file"):
+            manager.restore_backup(
+                metadata.backup_id, target_path=tmp_path / "restored", verify_first=False
+            )
+
+    def test_dot_slash_prefixed_members_are_accepted(self, tmp_path):
+        info = tarfile.TarInfo(f"./{INTENTLOG_DIR}/config.json")
+        BackupManager._validate_member(info, tmp_path)
+
