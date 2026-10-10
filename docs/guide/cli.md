@@ -41,6 +41,14 @@ ilog commit <message> [options]
 
 Automatically captures git context (branch, HEAD hash, staged files) as `metadata.git_context`.
 
+Prints the new intent as `[<hash>] <branch>: <name>`. `<hash>` is the 12-character
+intent hash, the same identifier `ilog log` and `ilog search` print, and it can be
+passed to `ilog show`, `ilog tag` and `ilog link`. The hash covers the intent's
+content *and* metadata, so it changes as soon as the intent is tagged or linked.
+Scripts that need a stable reference should capture the intent ID instead:
+`ilog show <hash>` prints it on the `ID:` line and `ilog log --json` exposes it
+as `intent_id`.
+
 ### log
 
 Show intent history.
@@ -61,12 +69,18 @@ ilog log [--limit N] [--branch NAME] [--git-commit HASH] [--json]
 Display a single intent with full metadata.
 
 ```bash
-ilog show <id> [--json]
+ilog show <id> [--branch NAME] [--json]
 ```
 
 | Option | Description |
 |--------|-------------|
+| `--branch, -b` | Branch to search (default: current) |
 | `--json` | Output as JSON for scripting |
+
+`<id>` is a prefix of the intent ID, of the intent hash printed by `commit`,
+`log` and `search`, or of the `chain_hash` stored in the branch file under
+`.intentlog/` (what older versions of `ilog commit` printed). Only the intent ID
+is stable: both hashes change once the intent is tagged or linked.
 
 ### search
 
@@ -172,19 +186,33 @@ ilog audit
 
 ### tag
 
-Tag an intent.
+Add or remove tags on an intent.
 
 ```bash
-ilog tag <intent-id> <name>
+ilog tag <intent-id> <tag>... [--remove] [--branch NAME]
 ```
+
+| Option | Description |
+|--------|-------------|
+| `--remove, -r` | Remove the tags instead of adding them |
+| `--branch, -b` | Branch to search (default: current) |
 
 ### link
 
-Link an external resource to an intent.
+Link two related intents.
 
 ```bash
-ilog link <intent-id> <url>
+ilog link <source-id> <target-id> [--branch NAME]
 ```
+
+| Option | Description |
+|--------|-------------|
+| `--branch, -b` | Branch holding the source intent (default: current) |
+
+The target is looked up on the source's branch first, then on every other
+branch, so a decision on `main` can link to an exploration recorded on a
+feature branch. The link is stored on the source intent as `metadata.links`
+(a list of target intent IDs) and listed by `ilog show`.
 
 ## Analytics Commands
 

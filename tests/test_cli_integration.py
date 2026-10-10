@@ -4,11 +4,11 @@ CLI Integration Tests for IntentLog
 These tests verify the CLI commands work correctly end-to-end.
 """
 
-import os
 import json
-import tempfile
+import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
@@ -276,3 +276,224 @@ class TestHelpFlag:
         assert "log" in result.stdout
         assert "search" in result.stdout
         assert "audit" in result.stdout
+
+
+def _latest_intent_id(branch=None):
+    """Return the intent_id of the newest intent on a branch via 'ilog log --json'"""
+    args = ["log", "--json"]
+    if branch:
+        args += ["--branch", branch]
+    result = run_ilog(*args)
+    assert result.returncode == 0, result.stdout
+    return json.loads(result.stdout)[0]["intent_id"]
+
+
+def _read_intents(intents_file):
+    """Load a branch file and index its intents by intent_id"""
+    with open(intents_file) as f:
+        data = json.load(f)
+    return {entry["intent_id"]: entry for entry in data["intents"]}
+
+
+class TestShowCommand:
+    """Tests for ilog show command"""
+
+    def test_show_resolves_hash_printed_by_commit(self, temp_project_dir):
+        """The hash printed by commit is the one log prints and show accepts"""
+        run_ilog("init", "test-project")
+        result = run_ilog("commit", "Chose PostgreSQL for concurrent writes")
+
+        assert result.returncode == 0
+        first_line = result.stdout.splitlines()[0]
+        assert first_line.startswith("[")
+        assert "] main:" in first_line
+        printed_hash = first_line[1:first_line.index("]")]
+        assert len(printed_hash) == 12
+
+        log_result = run_ilog("log")
+        assert f"[{printed_hash}]" in log_result.stdout
+
+        show_result = run_ilog("show", printed_hash)
+        assert show_result.returncode == 0
+        assert f"Intent {printed_hash}" in show_result.stdout
+        assert "PostgreSQL" in show_result.stdout
+
+    def test_show_accepts_chain_hash_prefix(self, temp_project_dir):
+        """A chain hash prefix (what older commit output printed) still resolves"""
+        run_ilog("init", "test-project")
+        run_ilog("commit", "First intent")
+
+        intents_file = temp_project_dir / ".intentlog" / "intents.json"
+        with open(intents_file) as f:
+            entry = json.load(f)["intents"][0]
+
+        result = run_ilog("show", entry["chain_hash"][:12])
+
+        assert result.returncode == 0
+        assert f"ID:        {entry['intent_id']}" in result.stdout
+
+    def test_show_unknown_id_fails(self, temp_project_dir):
+        """Test show with an id that matches nothing"""
+        run_ilog("init", "test-project")
+        run_ilog("commit", "First intent")
+
+        result = run_ilog("show", "ffffffffffff")
+
+        assert result.returncode == 1
+        assert "No intent matching" in result.stdout
+
+
+class TestLinkCommand:
+    """Tests for ilog link command"""
+
+    def test_link_same_branch(self, temp_project_dir):
+        """Linking two intents on the current branch persists the target id"""
+        run_ilog("init", "test-project")
+        run_ilog("commit", "Target intent")
+        target_id = _latest_intent_id()
+        run_ilog("commit", "Source intent")
+        source_id = _latest_intent_id()
+
+        result = run_ilog("link", source_id[:8], target_id[:8])
+
+        assert result.returncode == 0
+        assert "Linked [" in result.stdout
+        assert "Target intent" in result.stdout
+        assert "(on branch" not in result.stdout
+
+        by_id = _read_intents(temp_project_dir / ".intentlog" / "intents.json")
+        assert by_id[source_id]["metadata"]["links"] == [target_id]
+
+    def test_link_target_on_other_branch(self, temp_project_dir):
+        """A link may point at an intent that only exists on another branch"""
+        run_ilog("init", "test-project")
+        run_ilog("commit", "Initial decision")
+        run_ilog("branch", "exploration")
+        run_ilog("commit", "Exploration result")
+        exploration_id = _latest_intent_id("exploration")
+        run_ilog("branch", "main")
+        run_ilog("commit", "Final decision")
+        decision_id = _latest_intent_id("main")
+
+        result = run_ilog("link", decision_id[:8], exploration_id[:8])
+
+        assert result.returncode == 0, result.stdout
+        assert "Error" not in result.stdout
+        assert "Exploration result" in result.stdout
+        assert "(on branch 'exploration')" in result.stdout
+
+        # Persisted on the source (main) branch only
+        main_by_id = _read_intents(temp_project_dir / ".intentlog" / "intents.json")
+        assert main_by_id[decision_id]["metadata"]["links"] == [exploration_id]
+        branch_by_id = _read_intents(
+            temp_project_dir / ".intentlog" / "branches" / "exploration.json"
+        )
+        assert "links" not in branch_by_id[exploration_id]["metadata"]
+
+        show_result = run_ilog("show", decision_id[:8])
+        assert show_result.returncode == 0
+        assert exploration_id[:12] in show_result.stdout
+
+    def test_link_twice_reports_already_linked(self, temp_project_dir):
+        """Linking the same pair twice does not duplicate the link"""
+        run_ilog("init", "test-project")
+        run_ilog("commit", "Target intent")
+        target_id = _latest_intent_id()
+        run_ilog("commit", "Source intent")
+        source_id = _latest_intent_id()
+
+        run_ilog("link", source_id[:8], target_id[:8])
+        result = run_ilog("link", source_id[:8], target_id[:8])
+
+        assert result.returncode == 0
+        assert "Already linked" in result.stdout
+        by_id = _read_intents(temp_project_dir / ".intentlog" / "intents.json")
+        assert by_id[source_id]["metadata"]["links"] == [target_id]
+
+    def test_link_unknown_target_fails(self, temp_project_dir):
+        """Test link fails when the target matches nothing on any branch"""
+        run_ilog("init", "test-project")
+        run_ilog("commit", "Source intent")
+        source_id = _latest_intent_id()
+
+        result = run_ilog("link", source_id[:8], "ffffffffffff")
+
+        assert result.returncode == 1
+        assert "No intent matching 'ffffffffffff'" in result.stdout
+
+    @pytest.mark.parametrize("bad_branch", ["../evil", "bad name"])
+    def test_link_invalid_branch_name_fails_cleanly(self, temp_project_dir, bad_branch):
+        """An invalid --branch name is reported as an error, not a traceback"""
+        run_ilog("init", "test-project")
+        run_ilog("commit", "Source intent")
+        source_id = _latest_intent_id()
+
+        result = run_ilog("link", source_id[:8], source_id[:8], "--branch", bad_branch)
+
+        assert result.returncode == 1
+        assert "Error:" in result.stdout
+        assert "Traceback" not in result.stdout
+        assert "Traceback" not in result.stderr
+
+    def test_link_unknown_branch_fails_cleanly(self, temp_project_dir):
+        """A well-formed but missing --branch is reported as not found"""
+        run_ilog("init", "test-project")
+        run_ilog("commit", "Source intent")
+        source_id = _latest_intent_id()
+
+        result = run_ilog("link", source_id[:8], source_id[:8], "--branch", "nope")
+
+        assert result.returncode == 1
+        assert "Error: Branch 'nope' not found" in result.stdout
+        assert "Traceback" not in result.stderr
+
+
+class TestTagCommand:
+    """Tests for ilog tag command"""
+
+    def test_tag_add_and_remove(self, temp_project_dir):
+        """Tags added by tag persist and can be removed again"""
+        run_ilog("init", "test-project")
+        run_ilog("commit", "Tagged intent")
+        intent_id = _latest_intent_id()
+
+        result = run_ilog("tag", intent_id[:8], "alpha", "beta")
+        assert result.returncode == 0
+        assert "tags: alpha, beta" in result.stdout
+
+        result = run_ilog("tag", intent_id[:8], "alpha", "--remove")
+        assert result.returncode == 0
+        assert "Removed tag: alpha" in result.stdout
+
+        by_id = _read_intents(temp_project_dir / ".intentlog" / "intents.json")
+        assert by_id[intent_id]["metadata"]["tags"] == ["beta"]
+
+    @pytest.mark.parametrize("bad_branch", ["../evil", "bad name"])
+    def test_tag_invalid_branch_name_fails_cleanly(self, temp_project_dir, bad_branch):
+        """An invalid --branch name is reported as an error, not a traceback"""
+        run_ilog("init", "test-project")
+        run_ilog("commit", "Tagged intent")
+        intent_id = _latest_intent_id()
+
+        result = run_ilog("tag", intent_id[:8], "t", "--branch", bad_branch)
+
+        assert result.returncode == 1
+        assert "Error:" in result.stdout
+        assert "Traceback" not in result.stdout
+        assert "Traceback" not in result.stderr
+
+        # Nothing was written
+        by_id = _read_intents(temp_project_dir / ".intentlog" / "intents.json")
+        assert "tags" not in by_id[intent_id]["metadata"]
+
+    def test_tag_unknown_branch_fails_cleanly(self, temp_project_dir):
+        """A well-formed but missing --branch is reported as not found"""
+        run_ilog("init", "test-project")
+        run_ilog("commit", "Tagged intent")
+        intent_id = _latest_intent_id()
+
+        result = run_ilog("tag", intent_id[:8], "t", "--branch", "nope")
+
+        assert result.returncode == 1
+        assert "Error: Branch 'nope' not found" in result.stdout
+        assert "Traceback" not in result.stderr
