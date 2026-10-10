@@ -941,6 +941,50 @@ class TestUnreadableChainedEntry:
         assert _branch_data(storage) == before
 
 
+class TestNonDictAndUnparseableEntries:
+    """Any unreadable entry on a chained branch is damage, wherever it is."""
+
+    @staticmethod
+    def _set_entry(storage, index, value):
+        path = storage._get_branch_file("main")
+        data = json.loads(path.read_text())
+        data["intents"][index] = value
+        path.write_text(json.dumps(data, indent=2))
+
+    @pytest.mark.parametrize("value", [None, "garbage", 42, ["x"]])
+    def test_non_dict_tail_entry_is_reported_and_not_dropped(self, initialized_project, value):
+        storage = initialized_project
+        for name in "abc":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        self._set_entry(storage, 2, value)
+        before = _branch_data(storage)
+
+        assert not storage.verify_chain().valid
+        assert len(storage.load_intents()) == 2  # readable entries, no crash
+        with pytest.raises(ChainIntegrityError):
+            storage.add_chained_intent("d", "appended to a damaged branch")
+        intents = storage.load_intents()
+        intents[0].metadata["tags"] = ["x"]
+        with pytest.raises(ChainIntegrityError):
+            storage.save_intents(intents, strict=True)
+
+        assert _branch_data(storage) == before
+
+    def test_stripped_and_unparseable_entry_is_reported(self, initialized_project):
+        storage = initialized_project
+        for name in "abc":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        _strip(storage, 2)
+        path = storage._get_branch_file("main")
+        data = json.loads(path.read_text())
+        data["intents"][2]["timestamp"] = "yesterday"
+        path.write_text(json.dumps(data, indent=2))
+
+        assert not storage.verify_chain().valid
+        with pytest.raises(ChainIntegrityError):
+            storage.add_chained_intent("d", "appended to a damaged branch")
+
+
 class TestBranchNamesOnEveryPath:
     @pytest.mark.parametrize("name", ["../escape", "../../x", "a/b", "bad name"])
     def test_invalid_names_are_not_found_and_create_nothing(self, initialized_project, name):

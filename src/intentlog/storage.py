@@ -523,7 +523,7 @@ class IntentLogStorage:
                     parent_intent_id=intent_data.get("parent_intent_id"),
                 )
                 intents.append(intent)
-            except (KeyError, ValueError) as e:
+            except (KeyError, ValueError, TypeError) as e:
                 logger.warning(f"Skipping invalid intent data: {e}")
                 continue
 
@@ -637,13 +637,13 @@ class IntentLogStorage:
         )
 
         logger = get_logger()
-        raw_entries = [e for e in existing.get("intents", []) if isinstance(e, dict)]
+        raw_entries = list(existing.get("intents", []))
 
         # Parse the stored chain up to the first entry that is not a valid
         # chained entry; positions then line up with raw_entries.
         stored: List[ChainedIntent] = []
         for entry in raw_entries:
-            if "chain_hash" not in entry:
+            if not isinstance(entry, dict) or "chain_hash" not in entry:
                 break
             try:
                 stored.append(ChainedIntent.from_dict(entry))
@@ -675,7 +675,7 @@ class IntentLogStorage:
         branch_is_chained = _is_chained_data(existing)
         broken_at = None
         for i in range(keep, len(raw_entries)):
-            if "chain_hash" not in raw_entries[i]:
+            if not isinstance(raw_entries[i], dict) or "chain_hash" not in raw_entries[i]:
                 if branch_is_chained:
                     # On a chained branch every entry must carry chain data;
                     # a missing one means it was stripped by hand.
@@ -695,7 +695,7 @@ class IntentLogStorage:
                 raise ChainIntegrityError(message)
             logger.warning(message)
 
-        removed = sum(1 for e in raw_entries[keep:] if e.get("signature"))
+        removed = sum(1 for e in raw_entries[keep:] if isinstance(e, dict) and e.get("signature"))
         if removed:
             if strict:
                 raise SignatureLossError(branch, removed)
@@ -951,11 +951,12 @@ class IntentLogStorage:
             with open(branch_file) as f:
                 data = json.load(f)
 
+        branch_is_chained = _is_chained_data(data)
         chained = []
         for intent_data in data.get("intents", []):
             try:
                 # Check if chain data exists
-                if "chain_hash" in intent_data:
+                if isinstance(intent_data, dict) and "chain_hash" in intent_data:
                     # Load with existing chain data
                     chained.append(ChainedIntent.from_dict(intent_data))
                 else:
@@ -970,13 +971,15 @@ class IntentLogStorage:
                     )
                     chained.append(intent)
             except (KeyError, ValueError, TypeError) as e:
-                if isinstance(intent_data, dict) and "chain_hash" in intent_data:
-                    # A chained entry that cannot be read is damage, not noise:
-                    # keep it as a broken entry so verification reports it and
-                    # no later write silently drops it
+                if branch_is_chained:
+                    # On a chained branch an entry that cannot be read is
+                    # damage, not noise: keep it as a broken entry so
+                    # verification reports it and no later write drops it
                     logger.warning(f"Unreadable chained intent data: {e}")
                     chained.append(ChainedIntent(
-                        intent=_placeholder_intent(intent_data),
+                        intent=_placeholder_intent(
+                            intent_data if isinstance(intent_data, dict) else {}
+                        ),
                         intent_hash="",
                         prev_hash="",
                         chain_hash="",
