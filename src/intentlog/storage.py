@@ -19,7 +19,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional
+from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Tuple
 
 from .core import Intent
 from .logging import get_logger, log_context
@@ -178,6 +178,24 @@ class BranchExistsError(StorageError):
     pass
 
 
+class ChainIntegrityError(StorageError):
+    """Raised when a write would rewrite stored chain entries that fail verification"""
+    pass
+
+
+class SignatureLossError(StorageError):
+    """Raised when a write would remove intent signatures and that was not allowed"""
+
+    def __init__(self, branch: str, count: int):
+        self.branch = branch
+        self.count = count
+        super().__init__(
+            f"Saving branch '{branch}' would remove {count} signature(s). Signed "
+            "intents are hashed together with their metadata, so changing an "
+            "intent re-chains it and every intent after it"
+        )
+
+
 def compute_intent_hash(intent: Intent) -> str:
     """
     Compute SHA-256 hash of an intent for integrity verification.
@@ -222,6 +240,16 @@ def find_project_root(start_path: Optional[Path] = None, max_depth: int = 20) ->
         return current
 
     return None
+
+
+def _is_chained_data(data: Dict[str, Any]) -> bool:
+    """True if raw branch data carries hash-chain information."""
+    if "chain_version" in data:
+        return True
+    return any(
+        isinstance(entry, dict) and "chain_hash" in entry
+        for entry in data.get("intents", [])
+    )
 
 
 class IntentLogStorage:
@@ -472,37 +500,172 @@ class IntentLogStorage:
 
         return intents
 
-    def save_intents(self, intents: List[Intent], branch: Optional[str] = None) -> None:
+    def save_intents(
+        self,
+        intents: List[Intent],
+        branch: Optional[str] = None,
+        *,
+        strict: bool = False,
+    ) -> int:
         """
         Save intents to a branch.
+
+        On a hash-chained branch the stored chain is preserved: every stored
+        entry up to the first intent that was changed, inserted or removed is
+        kept verbatim, hashes and signature included, and only the intents
+        from that point on are re-chained. Appending intents therefore never
+        rewrites history. Changing an earlier intent (for example tagging it,
+        since tags live in the hashed metadata) re-chains that intent and every
+        later one, which invalidates their signatures, so those signatures are
+        removed. Branches without chain data keep the plain format.
 
         Args:
             intents: List of Intent objects to save
             branch: Branch name. If None, uses current branch.
+            strict: If True, refuse a rewrite that would remove signatures or
+                overwrite stored entries that fail chain verification. If
+                False, proceed and log a warning.
+
+        Returns:
+            Number of signatures removed because their intents were re-chained.
+
+        Raises:
+            SignatureLossError: If strict and signatures would be removed
+            ChainIntegrityError: If strict and the part of the stored chain
+                being rewritten fails verification
         """
         config = self.load_config()
         branch = branch or config.current_branch
 
         branch_file = self._get_branch_file(branch)
 
-        data = {
-            "branch": branch,
-            "intents": [
-                {
-                    "intent_id": i.intent_id,
-                    "intent_name": i.intent_name,
-                    "intent_reasoning": i.intent_reasoning,
-                    "timestamp": i.timestamp.isoformat() if isinstance(i.timestamp, datetime) else i.timestamp,
-                    "metadata": i.metadata,
-                    "parent_intent_id": i.parent_intent_id,
-                    "hash": compute_intent_hash(i),
-                }
-                for i in intents
-            ],
-        }
-
         with self._lock_file(branch_file, exclusive=True):
+            existing = self._read_branch_data(branch_file)
+
+            if _is_chained_data(existing):
+                chained, removed = self._rechain_preserving(
+                    branch, existing, intents, strict=strict
+                )
+                self.save_chained_intents(chained, branch)
+                return removed
+
+            data = {
+                "branch": branch,
+                "intents": [
+                    {
+                        "intent_id": i.intent_id,
+                        "intent_name": i.intent_name,
+                        "intent_reasoning": i.intent_reasoning,
+                        "timestamp": i.timestamp.isoformat() if isinstance(i.timestamp, datetime) else i.timestamp,
+                        "metadata": i.metadata,
+                        "parent_intent_id": i.parent_intent_id,
+                        "hash": compute_intent_hash(i),
+                    }
+                    for i in intents
+                ],
+            }
             _atomic_write_json(branch_file, data)
+            return 0
+
+    def _read_branch_data(self, branch_file: Path) -> Dict[str, Any]:
+        """Read a branch file's raw JSON under a shared lock ({} if it does not exist)."""
+        if not branch_file.is_file():
+            return {}
+        with self._lock_file(branch_file, exclusive=False):
+            with open(branch_file) as f:
+                data = json.load(f)
+        return data if isinstance(data, dict) else {}
+
+    def _rechain_preserving(
+        self,
+        branch: str,
+        existing: Dict[str, Any],
+        intents: List[Intent],
+        strict: bool = False,
+    ) -> Tuple[List["ChainedIntent"], int]:
+        """
+        Build the chain for ``intents`` while keeping the stored chain intact.
+
+        Stored entries are kept verbatim for as long as the intents match them
+        (same position, same intent_id, same content). From the first mismatch
+        on, intents are re-chained. Stored entries are kept even if they fail
+        verification, so a write never hides tampering; a rewrite that would
+        replace such entries is reported instead.
+
+        Returns:
+            (chain, number of signatures removed by the rewrite)
+        """
+        from .merkle import (
+            GENESIS_HASH,
+            ChainedIntent,
+            append_to_chain,
+            compute_chain_hash,
+            compute_intent_content_hash,
+        )
+
+        logger = get_logger()
+        raw_entries = [e for e in existing.get("intents", []) if isinstance(e, dict)]
+
+        # Parse the stored chain up to the first entry that is not a valid
+        # chained entry; positions then line up with raw_entries.
+        stored: List[ChainedIntent] = []
+        for entry in raw_entries:
+            if "chain_hash" not in entry:
+                break
+            try:
+                stored.append(ChainedIntent.from_dict(entry))
+            except (KeyError, ValueError, TypeError):
+                break
+
+        keep = 0
+        while (
+            keep < len(intents)
+            and keep < len(stored)
+            and stored[keep].intent.intent_id == intents[keep].intent_id
+            and compute_intent_content_hash(stored[keep].intent)
+            == compute_intent_content_hash(intents[keep])
+        ):
+            keep += 1
+
+        # Stored entries from `keep` on are about to be replaced.
+        broken_at = None
+        for i in range(keep, len(raw_entries)):
+            if "chain_hash" not in raw_entries[i]:
+                continue  # plain entries carry no chain claims to verify
+            if i >= len(stored):
+                broken_at = i
+                break
+            cur = stored[i]
+            expected_prev = stored[i - 1].chain_hash if i > 0 else GENESIS_HASH
+            if (
+                compute_intent_content_hash(cur.intent) != cur.intent_hash
+                or cur.prev_hash != expected_prev
+                or compute_chain_hash(cur.intent_hash, cur.prev_hash) != cur.chain_hash
+            ):
+                broken_at = i
+                break
+
+        if broken_at is not None:
+            message = (
+                f"Branch '{branch}' fails chain verification at position {broken_at}; "
+                "rewriting it would hide the break. Run 'ilog chain verify' for details"
+            )
+            if strict:
+                raise ChainIntegrityError(message)
+            logger.warning(message)
+
+        removed = sum(1 for e in raw_entries[keep:] if e.get("signature"))
+        if removed:
+            if strict:
+                raise SignatureLossError(branch, removed)
+            logger.warning(
+                "Removed signatures invalidated by re-chaining", branch=branch, count=removed
+            )
+
+        chained = list(stored[:keep])
+        for intent in intents[keep:]:
+            chained.append(append_to_chain(chained, intent))
+        return chained, removed
 
     def add_intent(
         self,
@@ -580,15 +743,27 @@ class IntentLogStorage:
 
             logger.info("Creating branch", branch=branch_name, from_branch=from_branch)
 
-            # Copy intents from source branch
+            # Copy intents from source branch (raises if it does not exist)
             intents = self.load_intents(from_branch)
 
-            # Create new branch file
-            data = {
+            data: Dict[str, Any] = {
                 "branch": branch_name,
                 "created_from": from_branch,
                 "created_at": datetime.now().isoformat(),
-                "intents": [
+            }
+
+            source = self._read_branch_data(self._get_branch_file(from_branch))
+            if _is_chained_data(source):
+                # Keep chain links and signatures: the new branch starts as an
+                # exact copy of the source chain.
+                from .merkle import compute_root_hash
+
+                chained = self.load_chained_intents(from_branch)
+                data["chain_version"] = "1.0"
+                data["root_hash"] = compute_root_hash(chained)
+                data["intents"] = [c.to_dict() for c in chained]
+            else:
+                data["intents"] = [
                     {
                         "intent_id": i.intent_id,
                         "intent_name": i.intent_name,
@@ -599,8 +774,7 @@ class IntentLogStorage:
                         "hash": compute_intent_hash(i),
                     }
                     for i in intents
-                ],
-            }
+                ]
 
             _atomic_write_json(new_branch_file, data)
 
@@ -941,16 +1115,14 @@ class IntentLogStorage:
         Returns:
             Number of intents migrated
         """
-        from .merkle import chain_intents
-
         with self.lock_branch(branch) as locked_branch:
-            # Load plain intents
             intents = self.load_intents(locked_branch)
             if not intents:
                 return 0
 
-            # Chain them
-            chained = chain_intents(intents)
+            # Chain them, keeping any chain data (and signatures) already stored
+            existing = self._read_branch_data(self._get_branch_file(locked_branch))
+            chained, _ = self._rechain_preserving(locked_branch, existing, intents)
 
             # Save with chain data
             self.save_chained_intents(chained, locked_branch)

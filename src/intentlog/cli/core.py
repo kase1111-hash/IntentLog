@@ -14,9 +14,11 @@ from ..git import detect_git_repo, get_git_context
 from ..storage import (
     BranchExistsError,
     BranchNotFoundError,
+    ChainIntegrityError,
     IntentLogStorage,
     ProjectExistsError,
     ProjectNotFoundError,
+    SignatureLossError,
     compute_intent_hash,
 )
 from ..validation import ValidationError
@@ -645,8 +647,8 @@ def _resolve_intent(storage, intent_id, branch=None):
     prefix. The chain data is only loaded when the first two passes miss,
     so the common case does not pay for it; the fallback keeps scripts that
     captured the chain hash older versions of 'ilog commit' printed working
-    until the intent is next tagged or linked (save_intents() rewrites the
-    branch file without chain fields, so both hashes change at that point).
+    until the intent, or an earlier intent on its branch, is tagged or linked:
+    that re-chains it, so its chain hash changes.
 
     Returns (intent_or_None, intents_list, branch). The returned intent is
     the object from intents_list, so callers may mutate it and save the list.
@@ -886,12 +888,35 @@ def cmd_blame(args):
         print()
 
 
+def _save_annotation(storage, intents, branch, force):
+    """
+    Save intents after a metadata edit (tag or link).
+
+    Tags and links live in the hashed metadata, so editing an intent re-chains
+    it and every later intent. Without --force, refuse when that would remove
+    signatures or overwrite chain entries that already fail verification.
+    """
+    try:
+        removed = storage.save_intents(intents, branch, strict=not force)
+    except SignatureLossError as e:
+        print(f"Error: {e}.")
+        print("Re-run with --force to apply the change and remove those signatures.")
+        sys.exit(1)
+    except ChainIntegrityError as e:
+        print(f"Error: {e}.")
+        print("Re-run with --force to rewrite the branch anyway.")
+        sys.exit(1)
+    if removed:
+        print(f"Warning: removed {removed} signature(s) invalidated by this change.")
+
+
 def cmd_tag(args):
     """Add or remove tags on an intent"""
     intent_id = args.intent_id
     tags = args.tags
     remove = getattr(args, 'remove', False)
     branch = getattr(args, 'branch', None)
+    force = getattr(args, 'force', False)
 
     storage = IntentLogStorage()
 
@@ -903,23 +928,27 @@ def cmd_tag(args):
             # Initialize tags list in metadata
             current_tags = found.metadata.get("tags", [])
 
+            # Report changes only once they are saved
+            notes = []
             if remove:
                 for tag in tags:
                     if tag in current_tags:
                         current_tags.remove(tag)
-                        print(f"  Removed tag: {tag}")
+                        notes.append(f"  Removed tag: {tag}")
                     else:
-                        print(f"  Tag not found: {tag}")
+                        notes.append(f"  Tag not found: {tag}")
             else:
                 for tag in tags:
                     if tag not in current_tags:
                         current_tags.append(tag)
-                        print(f"  Added tag: {tag}")
+                        notes.append(f"  Added tag: {tag}")
                     else:
-                        print(f"  Already tagged: {tag}")
+                        notes.append(f"  Already tagged: {tag}")
 
             found.metadata["tags"] = current_tags
-            storage.save_intents(intents, branch)
+            _save_annotation(storage, intents, branch, force)
+            for note in notes:
+                print(note)
     except (ProjectNotFoundError, ValidationError) as e:
         print(f"Error: {e}")
         sys.exit(1)
@@ -957,6 +986,7 @@ def cmd_link(args):
     source_id = args.source
     target_id = args.target
     branch = getattr(args, 'branch', None)
+    force = getattr(args, 'force', False)
 
     storage = IntentLogStorage()
 
@@ -979,7 +1009,7 @@ def cmd_link(args):
 
             links.append(target_ref)
             source.metadata["links"] = links
-            storage.save_intents(intents, branch)
+            _save_annotation(storage, intents, branch, force)
     except (ProjectNotFoundError, ValidationError) as e:
         print(f"Error: {e}")
         sys.exit(1)
@@ -1093,6 +1123,8 @@ def register_core_commands(subparsers):
     tag_parser.add_argument("tags", nargs="+", help="Tags to add or remove")
     tag_parser.add_argument("--remove", "-r", action="store_true", help="Remove tags instead of adding")
     tag_parser.add_argument("--branch", "-b", help="Branch to search")
+    tag_parser.add_argument("--force", action="store_true",
+                            help="Apply the change even if it removes signatures from re-chained intents")
     tag_parser.set_defaults(func=cmd_tag)
 
     # link command
@@ -1100,4 +1132,6 @@ def register_core_commands(subparsers):
     link_parser.add_argument("source", help="Source intent ID or hash prefix")
     link_parser.add_argument("target", help="Target intent ID or hash prefix")
     link_parser.add_argument("--branch", "-b", help="Branch to search")
+    link_parser.add_argument("--force", action="store_true",
+                             help="Apply the change even if it removes signatures from re-chained intents")
     link_parser.set_defaults(func=cmd_link)

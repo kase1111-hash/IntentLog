@@ -12,16 +12,19 @@ from pathlib import Path
 
 import pytest
 
+from intentlog import CRYPTO_AVAILABLE
 from intentlog.core import Intent
 from intentlog.filelock import LOCK_BACKEND, FileLock, FileLockError, FileLockTimeout
 from intentlog.storage import (
     INTENTLOG_DIR,
     BranchExistsError,
     BranchNotFoundError,
+    ChainIntegrityError,
     IntentLogStorage,
     ProjectConfig,
     ProjectExistsError,
     ProjectNotFoundError,
+    SignatureLossError,
     compute_intent_hash,
     find_project_root,
 )
@@ -623,3 +626,219 @@ class TestLockBranchSideEffects:
             assert branch == "feature-x.1_y"
             storage.add_intent("n", "r", branch=branch)
         assert len(storage.load_intents("feature-x.1_y")) == 1
+
+
+# =========================================================================
+# Chain data and signatures survive ordinary writes
+# =========================================================================
+
+
+def _branch_data(storage, branch="main"):
+    with open(storage._get_branch_file(branch)) as f:
+        return json.load(f)
+
+
+def _tamper(storage, index, branch="main"):
+    """Rewrite one stored intent's reasoning without updating its hashes."""
+    path = storage._get_branch_file(branch)
+    data = json.loads(path.read_text())
+    data["intents"][index]["intent_reasoning"] = "rewritten after the fact"
+    path.write_text(json.dumps(data, indent=2))
+
+
+class TestChainPreservation:
+    """save_intents/create_branch/migrate_to_chain keep the stored chain."""
+
+    def test_plain_branch_stays_plain(self, initialized_project):
+        storage = initialized_project
+        storage.add_intent("a", "plain one")
+        storage.add_intent("b", "plain two")
+
+        data = _branch_data(storage)
+        assert "chain_version" not in data
+        assert all("chain_hash" not in e for e in data["intents"])
+        assert all("hash" in e for e in data["intents"])
+
+    def test_append_keeps_existing_chain_entries(self, initialized_project):
+        storage = initialized_project
+        storage.add_chained_intent("a", "first")
+        storage.add_chained_intent("b", "second")
+        before = _branch_data(storage)["intents"]
+
+        storage.add_intent("c", "plain append")
+
+        after = _branch_data(storage)["intents"]
+        assert after[:2] == before
+        assert after[2]["prev_hash"] == before[1]["chain_hash"]
+        assert after[2]["sequence"] == 2
+        assert storage.verify_chain().valid
+
+    def test_edit_rechains_only_from_changed_intent(self, initialized_project):
+        storage = initialized_project
+        for name in "abc":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        before = _branch_data(storage)["intents"]
+
+        intents = storage.load_intents()
+        intents[1].metadata["tags"] = ["x"]
+        assert storage.save_intents(intents, strict=True) == 0
+
+        after = _branch_data(storage)["intents"]
+        assert after[0] == before[0]
+        assert after[1]["metadata"]["tags"] == ["x"]
+        assert after[1]["chain_hash"] != before[1]["chain_hash"]
+        assert after[2]["prev_hash"] == after[1]["chain_hash"]
+        assert storage.verify_chain().valid
+
+    def test_unchanged_save_rewrites_nothing(self, initialized_project):
+        storage = initialized_project
+        for name in "ab":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        before = _branch_data(storage)
+
+        storage.save_intents(storage.load_intents(), strict=True)
+
+        assert _branch_data(storage) == before
+
+    def test_create_branch_copies_chain(self, initialized_project):
+        storage = initialized_project
+        for name in "ab":
+            storage.add_chained_intent(name, f"reasoning {name}")
+
+        storage.create_branch("feat")
+
+        feat = _branch_data(storage, "feat")
+        assert feat["intents"] == _branch_data(storage)["intents"]
+        assert feat["created_from"] == "main"
+        assert feat["root_hash"] == storage.get_root_hash("main")
+        assert storage.verify_chain("feat").valid
+
+    def test_migrate_keeps_existing_chain(self, initialized_project):
+        storage = initialized_project
+        for name in "ab":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        before = _branch_data(storage)
+
+        assert storage.migrate_to_chain() == 2
+        assert _branch_data(storage) == before
+
+    def test_migrate_chains_plain_branch(self, initialized_project):
+        storage = initialized_project
+        storage.add_intent("a", "plain one")
+        storage.add_intent("b", "plain two")
+
+        assert storage.migrate_to_chain() == 2
+
+        data = _branch_data(storage)
+        assert all("chain_hash" in e for e in data["intents"])
+        assert storage.verify_chain().valid
+
+    def test_strict_rewrite_over_broken_entry_is_refused(self, initialized_project):
+        storage = initialized_project
+        for name in "abc":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        _tamper(storage, 1)
+        before = _branch_data(storage)
+
+        intents = storage.load_intents()
+        intents[0].metadata["tags"] = ["x"]
+        with pytest.raises(ChainIntegrityError):
+            storage.save_intents(intents, strict=True)
+
+        assert _branch_data(storage) == before
+        assert not storage.verify_chain().valid
+
+    def test_edit_after_broken_entry_keeps_the_evidence(self, initialized_project):
+        storage = initialized_project
+        for name in "abc":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        _tamper(storage, 0)
+
+        intents = storage.load_intents()
+        intents[2].metadata["tags"] = ["x"]
+        storage.save_intents(intents, strict=True)
+
+        data = _branch_data(storage)
+        assert data["intents"][0]["intent_reasoning"] == "rewritten after the fact"
+        assert data["intents"][2]["metadata"]["tags"] == ["x"]
+        assert not storage.verify_chain().valid
+
+    def test_append_to_broken_chain_keeps_the_evidence(self, initialized_project):
+        storage = initialized_project
+        for name in "ab":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        _tamper(storage, 0)
+
+        storage.add_intent("c", "appended after tampering")
+
+        assert not storage.verify_chain().valid
+
+
+@pytest.mark.skipif(not CRYPTO_AVAILABLE, reason="cryptography not installed")
+class TestSignedChainPreservation:
+    """Signatures survive every write that does not change their intents."""
+
+    @pytest.fixture
+    def signed_project(self, initialized_project):
+        storage = initialized_project
+        with pytest.warns(UserWarning):
+            storage.get_key_manager().generate_key()
+        for name in "abc":
+            storage.add_chained_intent(name, f"reasoning {name}", sign=True)
+        return storage
+
+    @staticmethod
+    def _signed(storage, branch="main"):
+        return [e.get("signature") is not None for e in _branch_data(storage, branch)["intents"]]
+
+    def test_strict_edit_is_refused_and_leaves_file_unchanged(self, signed_project):
+        storage = signed_project
+        before = _branch_data(storage)
+        intents = storage.load_intents()
+        intents[0].metadata["tags"] = ["x"]
+
+        with pytest.raises(SignatureLossError) as excinfo:
+            storage.save_intents(intents, strict=True)
+
+        assert excinfo.value.count == 3
+        assert excinfo.value.branch == "main"
+        assert _branch_data(storage) == before
+
+    def test_edit_removes_only_invalidated_signatures(self, signed_project):
+        storage = signed_project
+        intents = storage.load_intents()
+        intents[2].metadata["tags"] = ["x"]
+
+        assert storage.save_intents(intents) == 1
+
+        assert self._signed(storage) == [True, True, False]
+        chained = storage.load_chained_intents()
+        assert storage.verify_intent_signature(chained[0])
+        assert storage.verify_intent_signature(chained[1])
+        assert storage.verify_chain().valid
+
+    def test_append_keeps_signatures_valid(self, signed_project):
+        storage = signed_project
+        storage.add_intent("d", "plain append")
+
+        assert self._signed(storage) == [True, True, True, False]
+        for chained in storage.load_chained_intents()[:3]:
+            assert storage.verify_intent_signature(chained)
+
+    def test_migrate_keeps_signatures(self, signed_project):
+        storage = signed_project
+        before = _branch_data(storage)
+
+        assert storage.migrate_to_chain() == 3
+
+        assert _branch_data(storage) == before
+        assert self._signed(storage) == [True, True, True]
+
+    def test_create_branch_keeps_signatures_valid(self, signed_project):
+        storage = signed_project
+        storage.create_branch("feat")
+
+        assert self._signed(storage, "feat") == [True, True, True]
+        for chained in storage.load_chained_intents("feat"):
+            assert storage.verify_intent_signature(chained)
+

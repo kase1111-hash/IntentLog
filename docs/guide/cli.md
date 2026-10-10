@@ -80,7 +80,8 @@ ilog show <id> [--branch NAME] [--json]
 `<id>` is a prefix of the intent ID, of the intent hash printed by `commit`,
 `log` and `search`, or of the `chain_hash` stored in the branch file under
 `.intentlog/` (what older versions of `ilog commit` printed). Only the intent ID
-is stable: both hashes change once the intent is tagged or linked.
+is stable: tagging or linking an intent changes its intent hash and chain hash,
+and the chain hash of every later intent on the branch.
 
 ### search
 
@@ -189,30 +190,41 @@ ilog audit
 Add or remove tags on an intent.
 
 ```bash
-ilog tag <intent-id> <tag>... [--remove] [--branch NAME]
+ilog tag <intent-id> <tag>... [--remove] [--branch NAME] [--force]
 ```
 
 | Option | Description |
 |--------|-------------|
 | `--remove, -r` | Remove the tags instead of adding them |
 | `--branch, -b` | Branch to search (default: current) |
+| `--force` | Apply the change even if it removes signatures |
+
+Tags are stored in the intent's hashed metadata, so changing them re-chains
+that intent and every later intent on the branch. Intents before it keep their
+hashes and signatures. If any re-chained intent is signed, the command refuses
+and changes nothing, because the change would invalidate those signatures.
+`--force` applies it anyway and removes the invalidated signatures. The command
+also refuses when the part of the chain it would rewrite already fails
+`ilog chain verify`, so that a rewrite never hides evidence of tampering.
 
 ### link
 
 Link two related intents.
 
 ```bash
-ilog link <source-id> <target-id> [--branch NAME]
+ilog link <source-id> <target-id> [--branch NAME] [--force]
 ```
 
 | Option | Description |
 |--------|-------------|
 | `--branch, -b` | Branch holding the source intent (default: current) |
+| `--force` | Apply the change even if it removes signatures |
 
 The target is looked up on the source's branch first, then on every other
 branch, so a decision on `main` can link to an exploration recorded on a
 feature branch. The link is stored on the source intent as `metadata.links`
-(a list of target intent IDs) and listed by `ilog show`.
+(a list of target intent IDs) and listed by `ilog show`. Like `tag`, this edits
+hashed metadata, so the same signature rules and `--force` flag apply.
 
 ## Analytics Commands
 

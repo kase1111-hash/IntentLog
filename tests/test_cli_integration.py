@@ -13,6 +13,8 @@ from pathlib import Path
 
 import pytest
 
+from intentlog import CRYPTO_AVAILABLE
+
 
 @pytest.fixture
 def temp_project_dir():
@@ -497,3 +499,112 @@ class TestTagCommand:
         assert result.returncode == 1
         assert "Error: Branch 'nope' not found" in result.stdout
         assert "Traceback" not in result.stderr
+
+
+# =========================================================================
+# Chain data and signatures survive tag, link and merge
+# =========================================================================
+
+
+def _branch_entries(path):
+    with open(path) as f:
+        return json.load(f)["intents"]
+
+
+class TestChainPreservedByCommands:
+    """tag, link and merge keep the stored chain of untouched intents"""
+
+    def test_tag_keeps_earlier_chain_entries(self, temp_project_dir):
+        run_ilog("init", "test-project")
+        for message in ("first", "second", "third"):
+            run_ilog("commit", message)
+        intents_file = temp_project_dir / ".intentlog" / "intents.json"
+        before = _branch_entries(intents_file)
+
+        result = run_ilog("tag", before[2]["intent_id"][:8], "x")
+        assert result.returncode == 0, result.stdout
+
+        after = _branch_entries(intents_file)
+        assert after[:2] == before[:2]
+        assert after[2]["prev_hash"] == before[1]["chain_hash"]
+        verify = run_ilog("chain", "verify")
+        assert verify.returncode == 0 and "PASSED" in verify.stdout
+
+    def test_merge_keeps_target_chain(self, temp_project_dir):
+        run_ilog("init", "test-project")
+        run_ilog("commit", "on main")
+        run_ilog("branch", "feat")
+        run_ilog("commit", "on feat")
+        run_ilog("branch", "main")
+        intents_file = temp_project_dir / ".intentlog" / "intents.json"
+        before = _branch_entries(intents_file)
+
+        result = run_ilog("merge", "feat")
+        assert result.returncode == 0, result.stdout
+
+        after = _branch_entries(intents_file)
+        assert after[0] == before[0]
+        assert len(after) == 2 and all("chain_hash" in e for e in after)
+        verify = run_ilog("chain", "verify")
+        assert verify.returncode == 0 and "PASSED" in verify.stdout
+
+
+@pytest.mark.skipif(not CRYPTO_AVAILABLE, reason="cryptography not installed")
+class TestSignedAnnotations:
+    """tag and link refuse to remove signatures unless --force is given"""
+
+    def _signed_project(self, messages):
+        run_ilog("init", "test-project")
+        result = run_ilog("keys", "generate", "--name", "k")
+        assert result.returncode == 0, result.stdout + result.stderr
+        for message in messages:
+            result = run_ilog("commit", "--sign", message)
+            assert result.returncode == 0, result.stdout + result.stderr
+
+    def test_tag_without_force_is_refused(self, temp_project_dir):
+        self._signed_project(["signed"])
+        intents_file = temp_project_dir / ".intentlog" / "intents.json"
+        before = _branch_entries(intents_file)
+
+        result = run_ilog("tag", before[0]["intent_id"][:8], "x")
+
+        assert result.returncode == 1
+        assert "--force" in result.stdout
+        assert "Added tag" not in result.stdout
+        assert "Traceback" not in result.stdout + result.stderr
+        assert _branch_entries(intents_file) == before
+
+    def test_tag_with_force_removes_signature(self, temp_project_dir):
+        self._signed_project(["signed"])
+        intents_file = temp_project_dir / ".intentlog" / "intents.json"
+        intent_id = _branch_entries(intents_file)[0]["intent_id"]
+
+        result = run_ilog("tag", intent_id[:8], "x", "--force")
+
+        assert result.returncode == 0, result.stdout
+        assert "removed 1 signature" in result.stdout
+        entry = _branch_entries(intents_file)[0]
+        assert entry["metadata"]["tags"] == ["x"]
+        assert "signature" not in entry
+        verify = run_ilog("chain", "verify")
+        assert verify.returncode == 0 and "PASSED" in verify.stdout
+
+    def test_link_without_force_is_refused(self, temp_project_dir):
+        self._signed_project(["older", "newer"])
+        intents_file = temp_project_dir / ".intentlog" / "intents.json"
+        before = _branch_entries(intents_file)
+
+        result = run_ilog("link", before[1]["intent_id"][:8], before[0]["intent_id"][:8])
+
+        assert result.returncode == 1
+        assert "--force" in result.stdout
+        assert _branch_entries(intents_file) == before
+
+    def test_branch_keeps_signatures(self, temp_project_dir):
+        self._signed_project(["signed"])
+
+        run_ilog("branch", "feat")
+
+        feat = _branch_entries(temp_project_dir / ".intentlog" / "branches" / "feat.json")
+        assert feat[0].get("signature")
+
