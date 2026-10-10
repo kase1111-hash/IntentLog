@@ -23,6 +23,11 @@ from .logging import get_logger, log_context
 from .storage import INTENTLOG_DIR, IntentLogStorage
 
 
+def _is_private_key(path: Path) -> bool:
+    """True for private signing key files, which backups leave out by default."""
+    return path.suffix == ".key" or (path.suffix == ".pem" and "private" in path.name.lower())
+
+
 @dataclass
 class BackupMetadata:
     """Metadata for a backup archive."""
@@ -249,10 +254,7 @@ class BackupManager:
                         # Skip private keys unless explicitly requested. KeyManager
                         # stores them as keys/<name>.key; also skip PEM files that
                         # are named as private keys.
-                        if not include_keys and (
-                            item.suffix == ".key"
-                            or (item.suffix == ".pem" and "private" in item.name.lower())
-                        ):
+                        if not include_keys and _is_private_key(item):
                             logger.debug(f"Skipping private key: {item.name}")
                             continue
 
@@ -526,23 +528,37 @@ class BackupManager:
             # partial restore behind
             try:
                 mode = "r:gz" if metadata.compression == "gzip" else "r"
+                seen = set()
                 with tarfile.open(backup_path, mode) as tar:
                     for member in tar.getmembers():
-                        if member.name != "backup_metadata.json":
-                            self._validate_member(member, target_path)
+                        if member.name == "backup_metadata.json":
+                            continue
+                        self._validate_member(member, target_path)
+                        name = member.name.replace("\\", "/").rstrip("/")
+                        while name.startswith("./"):
+                            name = name[2:]
+                        if name in seen:
+                            raise RestoreError(f"Duplicate archive member: {member.name}")
+                        seen.add(name)
+                        if name == INTENTLOG_DIR and not member.isdir():
+                            raise RestoreError(f"{INTENTLOG_DIR} must be a directory in the archive")
             except tarfile.TarError as e:
                 raise RestoreError(f"Cannot read backup archive: {e}") from e
 
             # Check for existing project
+            backup_existing = None
             if target_intentlog.exists():
                 if not overwrite:
                     raise RestoreError(
                         "Target already has IntentLog project. Use overwrite=True to replace."
                     )
-                # Backup existing before overwriting
-                backup_existing = target_intentlog.with_suffix(".bak")
-                if backup_existing.exists():
-                    shutil.rmtree(backup_existing)
+                # Move the existing project aside. Never delete an earlier
+                # copy: it may hold the only copy of a private key.
+                backup_existing = target_intentlog.with_name(f"{INTENTLOG_DIR}.bak")
+                n = 1
+                while backup_existing.exists():
+                    n += 1
+                    backup_existing = target_intentlog.with_name(f"{INTENTLOG_DIR}.bak{n}")
                 shutil.move(str(target_intentlog), str(backup_existing))
                 warnings.append(f"Existing project backed up to {backup_existing}")
 
@@ -554,10 +570,48 @@ class BackupManager:
                 target_path.mkdir(parents=True, exist_ok=True)
 
                 mode = "r:gz" if metadata.compression == "gzip" else "r"
-                with tarfile.open(backup_path, mode) as tar:
-                    for member in tar.getmembers():
-                        if member.name != "backup_metadata.json":
-                            self._safe_extract_member(tar, member, target_path)
+                try:
+                    with tarfile.open(backup_path, mode) as tar:
+                        for member in tar.getmembers():
+                            if member.name != "backup_metadata.json":
+                                self._safe_extract_member(tar, member, target_path)
+                except BaseException:
+                    # Put the previous project back rather than leave a
+                    # partial restore in its place
+                    if target_intentlog.exists():
+                        shutil.rmtree(target_intentlog, ignore_errors=True)
+                    if backup_existing is not None and backup_existing.exists():
+                        shutil.move(str(backup_existing), str(target_intentlog))
+                    raise
+
+                # Backups leave private keys out by default; keep the ones the
+                # replaced project had so signing keeps working
+                if backup_existing is not None:
+                    kept = 0
+                    for item in backup_existing.rglob("*"):
+                        if item.is_file() and _is_private_key(item):
+                            dest = target_intentlog / item.relative_to(backup_existing)
+                            if not dest.exists():
+                                dest.parent.mkdir(parents=True, exist_ok=True)
+                                shutil.copy2(item, dest)
+                                kept += 1
+                    if kept:
+                        warnings.append(
+                            f"Kept {kept} private key file(s) from the replaced project"
+                        )
+
+                keys_dir = target_intentlog / "keys"
+                if keys_dir.is_dir():
+                    missing = [
+                        pub.stem for pub in keys_dir.glob("*.pub")
+                        if not pub.with_suffix(".key").exists()
+                    ]
+                    if missing:
+                        warnings.append(
+                            "Restored project has no private key for: "
+                            + ", ".join(sorted(missing))
+                            + " (backups exclude private keys unless include_keys=True)"
+                        )
 
                 if progress_callback:
                     progress_callback("Verifying restored data...", 0.8)

@@ -453,3 +453,91 @@ class TestRestoreScope:
         info = tarfile.TarInfo(f"./{INTENTLOG_DIR}/config.json")
         BackupManager._validate_member(info, tmp_path)
 
+
+class TestRestoreKeepsKeysAndRollsBack:
+    @staticmethod
+    def _add_key(project):
+        keys_dir = project / INTENTLOG_DIR / "keys"
+        keys_dir.mkdir(exist_ok=True)
+        (keys_dir / "default.key").write_text("PRIVATE KEY")
+        (keys_dir / "default.pub").write_text("PUBLIC KEY")
+        return keys_dir / "default.key"
+
+    def test_in_place_restore_keeps_private_keys(self, manager, project):
+        key = self._add_key(project)
+        _, metadata = manager.create_backup()
+
+        for _ in range(2):
+            result = manager.restore_backup(
+                metadata.backup_id, target_path=project, overwrite=True
+            )
+            assert result.success is True
+            assert key.read_text() == "PRIVATE KEY"
+            assert any("Kept 1 private key" in w for w in result.warnings)
+
+        # Earlier copies are never deleted
+        assert (project / f"{INTENTLOG_DIR}.bak" / "keys" / "default.key").is_file()
+        assert (project / f"{INTENTLOG_DIR}.bak2" / "keys" / "default.key").is_file()
+
+    def test_fresh_restore_warns_about_missing_private_key(self, manager, project, tmp_path):
+        self._add_key(project)
+        _, metadata = manager.create_backup()
+
+        result = manager.restore_backup(metadata.backup_id, target_path=tmp_path / "fresh")
+
+        assert result.success is True
+        assert any("no private key for: default" in w for w in result.warnings)
+
+    def test_failed_extraction_puts_the_old_project_back(self, manager, project, monkeypatch):
+        _, metadata = manager.create_backup()
+        IntentLogStorage(project).add_intent("later", "only in the live project")
+        before = _intent_tuples(project)
+
+        calls = {"n": 0}
+        original = BackupManager._safe_extract_member
+
+        def flaky(tar, member, target_path):
+            calls["n"] += 1
+            if calls["n"] == 2:
+                raise OSError("disk full")
+            return original(tar, member, target_path)
+
+        monkeypatch.setattr(BackupManager, "_safe_extract_member", staticmethod(flaky))
+
+        with pytest.raises(RestoreError, match="disk full"):
+            manager.restore_backup(metadata.backup_id, target_path=project, overwrite=True)
+
+        assert _intent_tuples(project) == before
+        assert not (project / f"{INTENTLOG_DIR}.bak").exists()
+
+    def test_duplicate_members_are_rejected_before_writing(self, manager, project):
+        backup_path, metadata = manager.create_backup()
+        _rewrite_archive(backup_path, f"{INTENTLOG_DIR}/{INTENTS_FILE}", data=b"{}")
+        before = _intent_tuples(project)
+
+        with pytest.raises(RestoreError, match="Duplicate"):
+            manager.restore_backup(
+                metadata.backup_id, target_path=project, overwrite=True, verify_first=False
+            )
+
+        assert _intent_tuples(project) == before
+
+    def test_intentlog_as_regular_file_is_rejected(self, tmp_path):
+        import io
+
+        archive = tmp_path / "a.tar"
+        with tarfile.open(archive, "w") as tar:
+            info = tarfile.TarInfo(INTENTLOG_DIR)
+            info.size = 1
+            tar.addfile(info, io.BytesIO(b"x"))
+        manager = BackupManager(tmp_path, backup_dir=tmp_path)
+        manager._find_backup_file = lambda backup_id: archive
+        manager.get_backup = lambda backup_id: BackupMetadata(
+            backup_id="x", created_at="", project_name="p", source_path=str(tmp_path),
+            backup_type="full", compression="none", branches=[], intent_count=0,
+            chain_hashes={}, checksum="", size_bytes=0,
+        )
+
+        with pytest.raises(RestoreError, match="must be a directory"):
+            manager.restore_backup("x", target_path=tmp_path / "out", verify_first=False)
+
