@@ -659,6 +659,26 @@ class TestDamagedChainCommands:
         assert run_ilog("chain", "verify").returncode == 0
 
 
+class TestRepairAllUnreadable:
+    def test_migrate_force_repairs_branch_with_only_unreadable_entries(self, temp_project_dir):
+        run_ilog("init", "test-project")
+        run_ilog("commit", "only entry")
+        intents_file = temp_project_dir / ".intentlog" / "intents.json"
+        with open(intents_file) as f:
+            data = json.load(f)
+        data["intents"][0] = None
+        with open(intents_file, "w") as f:
+            json.dump(data, f)
+
+        assert run_ilog("commit", "refused").returncode == 1
+        assert run_ilog("chain", "migrate").returncode == 1
+
+        result = run_ilog("chain", "migrate", "--force")
+        assert result.returncode == 0, result.stdout
+        assert run_ilog("chain", "verify").returncode == 0
+        assert run_ilog("commit", "works again").returncode == 0
+
+
 class TestTagNoOp:
     def test_removing_absent_tag_rewrites_nothing(self, temp_project_dir):
         run_ilog("init", "test-project")

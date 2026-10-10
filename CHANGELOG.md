@@ -20,7 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Invalid `--branch` names in `tag` and `link` print an error instead of a traceback, and so does a branch lock that stays held for more than 10 seconds.
 - `ilog link` no longer holds the source branch's lock while reading other branches, which could deadlock two links in opposite directions.
 - `ilog tag` no longer rewrites an intent when no tag changed.
-- `ilog chain verify` reports entries whose chain data was removed or cannot be read, including the first entry, instead of crashing or re-hashing the branch as if it had never been chained. `ilog commit` refuses to append to such a branch, and `ilog chain migrate --force` rebuilds the chain from the first damaged entry.
+- `ilog chain verify` reports entries whose chain data was removed or cannot be read, including the first entry, instead of crashing or re-hashing the branch as if it had never been chained. `ilog commit` and `IntentLogStorage.add_intent()` refuse to append to such a branch, and `ilog chain migrate --force` rebuilds the chain from the first damaged entry, even when no entry is readable.
 - Branch names are validated on every storage path, so no branch name or `config.json` value can address a file outside `.intentlog/`.
 - `mkdocs build --strict` passes again, and the API reference only lists members that exist. The `docs` extra allows mkdocstrings 1.x, which works with current pymdown-extensions.
 - `examples/basic_usage.py`, `benchmarks/run_benchmarks.py` and the pytest-benchmark suite run against the v0.2.0 API.
@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - `--force` for `ilog tag` and `ilog link`. Without it they refuse a change that would remove signatures, or that would rewrite chain entries which already fail verification.
-- `--force` for `ilog merge` and `ilog chain migrate`, which otherwise refuse to rewrite a damaged stored chain. `migrate_to_chain()` takes `force=`.
+- `--force` for `ilog merge` and `ilog chain migrate`, which otherwise refuse to rewrite a damaged stored chain. `migrate_to_chain()` and `add_intent()` take `force=`.
 - `IntentLogStorage.save_intents()` takes `strict=` and returns the number of signatures removed. New exceptions: `SignatureLossError` and `ChainIntegrityError`.
 
 ### Changed

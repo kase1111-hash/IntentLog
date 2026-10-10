@@ -168,7 +168,7 @@ def cmd_chain(args):
             root_hash = storage.get_root_hash(branch)
             print(f"Root hash: {root_hash[:16]}...")
         else:
-            print("No intents to migrate.")
+            print("No readable intents to migrate.")
 
     elif action == "status":
         try:

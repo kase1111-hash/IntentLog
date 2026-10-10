@@ -381,7 +381,7 @@ class IntentLogStorage:
             with storage.lock_branch() as branch:
                 intents = storage.load_intents(branch)
                 intents.append(new_intent)
-                storage.save_intents(intents, branch)
+                storage.save_intents(intents, branch, strict=True)
         """
         # Resolve and validate BEFORE locking: acquiring the lock creates the
         # lock file (and its parent directories), so an uninitialized project
@@ -715,9 +715,14 @@ class IntentLogStorage:
         metadata: Optional[Dict[str, Any]] = None,
         parent_id: Optional[str] = None,
         branch: Optional[str] = None,
+        force: bool = False,
     ) -> Intent:
         """
         Add a new intent to the log.
+
+        Appending to an intact chain never rewrites it. If the branch's
+        stored chain is damaged, appending would rewrite the damaged part, so
+        it is refused unless forced.
 
         Args:
             name: Intent name/title
@@ -725,9 +730,15 @@ class IntentLogStorage:
             metadata: Optional metadata dict
             parent_id: Optional parent intent ID
             branch: Branch to add to. If None, uses current branch.
+            force: Rewrite a damaged stored chain anyway (removing signatures
+                on the rewritten entries)
 
         Returns:
             The created Intent with computed hash
+
+        Raises:
+            ChainIntegrityError: If not forced and the stored chain is damaged
+            SignatureLossError: If not forced and signatures would be removed
         """
         logger = get_logger()
 
@@ -748,7 +759,7 @@ class IntentLogStorage:
             with self.lock_branch(branch) as locked_branch:
                 intents = self.load_intents(locked_branch)
                 intents.append(intent)
-                self.save_intents(intents, locked_branch)
+                self.save_intents(intents, locked_branch, strict=not force)
             logger.info("Added intent", name=name[:50], intent_id=intent.intent_id[:12])
 
         return intent
@@ -1200,11 +1211,13 @@ class IntentLogStorage:
         """
         with self.lock_branch(branch) as locked_branch:
             intents = self.load_intents(locked_branch)
-            if not intents:
+            existing = self._read_branch_data(self._get_branch_file(locked_branch))
+            # Nothing to do only if nothing is stored: a branch whose entries
+            # are all unreadable still needs repairing
+            if not existing.get("intents"):
                 return 0
 
             # Chain them, keeping any chain data (and signatures) already stored
-            existing = self._read_branch_data(self._get_branch_file(locked_branch))
             chained, _ = self._rechain_preserving(
                 locked_branch, existing, intents, strict=not force, repair=force
             )

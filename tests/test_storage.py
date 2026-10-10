@@ -985,6 +985,54 @@ class TestNonDictAndUnparseableEntries:
             storage.add_chained_intent("d", "appended to a damaged branch")
 
 
+class TestRepairPaths:
+    """Damage blocks plain appends too, and can always be repaired with force."""
+
+    @staticmethod
+    def _null_entry(storage, index):
+        path = storage._get_branch_file("main")
+        data = json.loads(path.read_text())
+        data["intents"][index] = None
+        path.write_text(json.dumps(data, indent=2))
+
+    def test_add_intent_refuses_damaged_chain_unless_forced(self, initialized_project):
+        storage = initialized_project
+        for name in "abc":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        self._null_entry(storage, 1)
+        before = _branch_data(storage)
+
+        with pytest.raises(ChainIntegrityError):
+            storage.add_intent("d", "plain append")
+        assert _branch_data(storage) == before
+
+        storage.add_intent("d", "plain append", force=True)
+        assert storage.verify_chain().valid
+
+    def test_add_intent_on_intact_chain_needs_no_force(self, initialized_project):
+        storage = initialized_project
+        storage.add_chained_intent("a", "reasoning a")
+
+        storage.add_intent("b", "plain append")
+
+        assert storage.verify_chain().valid
+
+    def test_branch_with_only_unreadable_entries_can_be_repaired(self, initialized_project):
+        storage = initialized_project
+        storage.add_chained_intent("a", "reasoning a")
+        self._null_entry(storage, 0)
+
+        with pytest.raises(ChainIntegrityError):
+            storage.add_chained_intent("b", "appended to a damaged branch")
+        with pytest.raises(ChainIntegrityError):
+            storage.migrate_to_chain()
+
+        assert storage.migrate_to_chain(force=True) == 0
+        assert storage.verify_chain().valid
+        storage.add_chained_intent("b", "works again after the repair")
+        assert storage.verify_chain().valid
+
+
 class TestBranchNamesOnEveryPath:
     @pytest.mark.parametrize("name", ["../escape", "../../x", "a/b", "bad name"])
     def test_invalid_names_are_not_found_and_create_nothing(self, initialized_project, name):
