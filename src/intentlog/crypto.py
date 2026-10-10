@@ -11,24 +11,24 @@ Features:
 - Key storage and loading from .intentlog/keys/
 """
 
-import json
 import hashlib
+import json
 import os
-from pathlib import Path
-from datetime import datetime
-from typing import Optional, Dict, Any, Tuple
 from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
 
 from .validation import validate_key_name
 
 # Use cryptography library for Ed25519
 try:
+    from cryptography.exceptions import InvalidSignature
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric.ed25519 import (
         Ed25519PrivateKey,
         Ed25519PublicKey,
     )
-    from cryptography.exceptions import InvalidSignature
     CRYPTO_AVAILABLE = True
 except BaseException:
     CRYPTO_AVAILABLE = False
@@ -356,7 +356,7 @@ class KeyManager:
     def _load_metadata(self) -> Dict[str, Any]:
         """Load key metadata"""
         if self.metadata_file.exists():
-            with open(self.metadata_file, "r") as f:
+            with open(self.metadata_file) as f:
                 return json.load(f)
         return {"keys": {}, "default_key": None}
 

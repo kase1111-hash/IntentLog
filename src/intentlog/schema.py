@@ -15,7 +15,6 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 
 from .logging import get_logger
 
-
 # JSON Schema definitions
 CONFIG_SCHEMA = {
     "type": "object",
@@ -397,7 +396,7 @@ def validate_config_file(path: Path) -> ValidationResult:
     logger = get_logger()
 
     try:
-        with open(path, "r") as f:
+        with open(path) as f:
             data = json.load(f)
     except json.JSONDecodeError as e:
         return ValidationResult(
@@ -434,7 +433,7 @@ def validate_intents_file(path: Path) -> ValidationResult:
     logger = get_logger()
 
     try:
-        with open(path, "r") as f:
+        with open(path) as f:
             data = json.load(f)
     except json.JSONDecodeError as e:
         return ValidationResult(
@@ -468,7 +467,7 @@ def validate_project(project_path: Path) -> Tuple[bool, List[str]]:
     Returns:
         Tuple of (all_valid, list_of_issues)
     """
-    from .storage import INTENTLOG_DIR, CONFIG_FILE, INTENTS_FILE, BRANCHES_DIR
+    from .storage import BRANCHES_DIR, CONFIG_FILE, INTENTLOG_DIR, INTENTS_FILE
 
     issues = []
     intentlog_dir = project_path / INTENTLOG_DIR
@@ -514,7 +513,7 @@ def check_project_health(project_path: Optional[Path] = None) -> Dict[str, Any]:
     Returns:
         Dict with health check results
     """
-    from .storage import find_project_root, IntentLogStorage
+    from .storage import IntentLogStorage, find_project_root
 
     if project_path is None:
         project_path = find_project_root()

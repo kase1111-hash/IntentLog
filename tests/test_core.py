@@ -1,5 +1,6 @@
 """Tests for IntentLog core functionality"""
 import pytest
+
 from intentlog.core import Intent, IntentLog
 
 

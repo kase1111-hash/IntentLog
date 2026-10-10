@@ -9,20 +9,18 @@ Provides comprehensive backup and recovery capabilities:
 - Cloud storage support (S3, GCS, Azure Blob)
 """
 
-import gzip
 import hashlib
 import json
 import os
 import shutil
 import tarfile
-import tempfile
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .logging import get_logger, log_context
-from .storage import IntentLogStorage, INTENTLOG_DIR
+from .storage import INTENTLOG_DIR, IntentLogStorage
 
 
 @dataclass
@@ -293,7 +291,7 @@ class BackupManager:
 
         for meta_file in self.backup_dir.glob("*.meta.json"):
             try:
-                with open(meta_file, "r") as f:
+                with open(meta_file) as f:
                     data = json.load(f)
                     backups.append(BackupMetadata.from_dict(data))
             except Exception as e:
@@ -486,7 +484,7 @@ class BackupManager:
             if target_intentlog.exists():
                 if not overwrite:
                     raise RestoreError(
-                        f"Target already has IntentLog project. Use overwrite=True to replace."
+                        "Target already has IntentLog project. Use overwrite=True to replace."
                     )
                 # Backup existing before overwriting
                 backup_existing = target_intentlog.with_suffix(".bak")

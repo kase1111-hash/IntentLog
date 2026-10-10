@@ -4,19 +4,19 @@ Semantic Features for IntentLog
 Provides LLM-powered semantic diff, search, merge, and formalization capabilities.
 """
 
-import math
 import hashlib
 import json
-from enum import Enum
-from typing import Optional, List, Dict, Any, Tuple, Union
+import math
 from dataclasses import dataclass, field
-from pathlib import Path
 from datetime import datetime
+from enum import Enum
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
 
 from .core import Intent
-from .llm.provider import LLMProvider, LLMConfig, LLMResponse, EmbeddingResponse
-from .validation import scan_for_injection_patterns
+from .llm.provider import LLMProvider
 from .logging import get_logger
+from .validation import scan_for_injection_patterns
 
 
 class FormalizationType(Enum):
@@ -469,9 +469,9 @@ class SemanticEngine:
         cache_file = self.cache_dir / "embeddings.json"
         if cache_file.is_file():
             try:
-                with open(cache_file, "r") as f:
+                with open(cache_file) as f:
                     self._embedding_cache = json.load(f)
-            except (json.JSONDecodeError, IOError):
+            except (OSError, json.JSONDecodeError):
                 self._embedding_cache = {}
 
     def _save_embedding_cache(self) -> None:
@@ -743,7 +743,6 @@ class SemanticEngine:
 
         # Index intents by ID
         a_by_id = {i.intent_id: i for i in intents_a}
-        b_by_id = {i.intent_id: i for i in intents_b}
 
         # Find intents only in B (new intents)
         new_in_b = [i for i in intents_b if i.intent_id not in a_by_id]

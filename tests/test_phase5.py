@@ -7,46 +7,60 @@ Tests for:
 - Session tracking
 - Nested intent tracing
 """
-import pytest
-
-pytestmark = pytest.mark.context
-
-import pytest
 import asyncio
+import os
 import tempfile
 import time
-import os
-from pathlib import Path
 from datetime import datetime, timedelta
+from pathlib import Path
+
+import pytest
 
 from intentlog.context import (
+    INTENT_CONTEXT_ENV_VAR,
+    ContextStatus,
     IntentContext,
-    SessionContext,
     IntentContextManager,
+    SessionContext,
     SessionContextManager,
-    get_current_intent,
-    set_current_intent,
-    get_current_session,
-    set_current_session,
-    intent_scope,
-    session_scope,
-    get_intent_chain,
+    clear_hooks,
+    get_all_labels,
+    get_all_tags,
     get_current_depth,
+    get_current_intent,
+    get_current_session,
+    get_intent_chain,
+    get_root_context,
     get_session_id,
+    get_span_id,
+    get_trace_id,
+    has_tag_in_chain,
+    intent_scope,
+    intent_scope_enhanced,
+    propagate_context_to_env,
+    register_on_enter_hook,
+    register_on_exit_hook,
+    restore_context_from_env,
+    session_scope,
+    set_current_intent,
+    set_current_session,
+    unregister_on_enter_hook,
+    with_labels,
+    with_tags,
 )
-
 from intentlog.decorator import (
-    intent_logger,
-    intent_logger_class,
     IntentLoggerConfig,
     LogLevel,
-    set_log_level,
-    get_log_level,
-    should_log,
-    get_intent_log,
     clear_intent_log,
+    get_intent_log,
+    get_log_level,
+    intent_logger,
+    intent_logger_class,
+    set_log_level,
+    should_log,
 )
 
+pytestmark = pytest.mark.context
 
 # ============================================================================
 # Context Tests
@@ -665,28 +679,6 @@ class TestPersistence:
 # Extended Context Management Tests
 # ============================================================================
 
-from intentlog.context import (
-    ContextStatus,
-    EnhancedIntentContextManager,
-    intent_scope_enhanced,
-    register_on_enter_hook,
-    register_on_exit_hook,
-    unregister_on_enter_hook,
-    unregister_on_exit_hook,
-    clear_hooks,
-    propagate_context_to_env,
-    restore_context_from_env,
-    get_all_tags,
-    get_all_labels,
-    has_tag_in_chain,
-    get_root_context,
-    get_trace_id,
-    get_span_id,
-    with_tags,
-    with_labels,
-    INTENT_CONTEXT_ENV_VAR,
-)
-
 
 class TestContextStatus:
     """Tests for ContextStatus enum"""
@@ -974,7 +966,7 @@ class TestEnvironmentPropagation:
 
     def test_propagate_to_env(self):
         """Context is propagated to environment"""
-        with intent_scope("propagated") as ctx:
+        with intent_scope("propagated"):
             propagate_context_to_env()
             assert INTENT_CONTEXT_ENV_VAR in os.environ
 
@@ -1028,7 +1020,7 @@ class TestContextQueryFunctions:
 
     def test_get_root_context(self):
         """Get root context from chain"""
-        with intent_scope("root") as root:
+        with intent_scope("root"):
             with intent_scope("child"):
                 with intent_scope("grandchild"):
                     found = get_root_context()
@@ -1064,7 +1056,7 @@ class TestContextDecorators:
             return ctx.tags if ctx else set()
 
         with intent_scope("outer") as ctx:
-            tags = my_func()
+            my_func()
             assert "decorated" in ctx.tags
             assert "tagged" in ctx.tags
 

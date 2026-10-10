@@ -15,9 +15,9 @@ import os
 import sys
 import threading
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import IO, Dict, Optional
-from contextlib import contextmanager
 
 # Platform-specific imports
 LOCK_AVAILABLE = False
@@ -25,14 +25,14 @@ LOCK_BACKEND = "none"
 
 if sys.platform == "win32":
     try:
-        import msvcrt
+        import msvcrt  # noqa: F401
         LOCK_AVAILABLE = True
         LOCK_BACKEND = "msvcrt"
     except ImportError:
         pass
 else:
     try:
-        import fcntl
+        import fcntl  # noqa: F401
         LOCK_AVAILABLE = True
         LOCK_BACKEND = "fcntl"
     except ImportError:
@@ -206,7 +206,7 @@ class FileLock:
 
         try:
             handle = open(self.path, "a+")
-        except (IOError, OSError) as e:
+        except OSError as e:
             raise FileLockError(f"Failed to open file for locking: {self.path}: {e}") from e
 
         record.file = handle
@@ -225,7 +225,7 @@ class FileLock:
             try:
                 fcntl.flock(handle.fileno(), lock_type | fcntl.LOCK_NB)
                 return
-            except (IOError, OSError):
+            except OSError:
                 if time.monotonic() - start_time >= self.timeout:
                     handle.close()
                     record.file = None
@@ -263,7 +263,7 @@ class FileLock:
                 handle.seek(0)
                 msvcrt.locking(handle.fileno(), lock_mode, 1)
                 return
-            except (IOError, OSError):
+            except OSError:
                 if time.monotonic() - start_time >= self.timeout:
                     handle.close()
                     record.file = None
@@ -329,7 +329,7 @@ class FileLock:
     def _is_stale_lock(self, lock_path: Path) -> bool:
         """Check if a lock file is stale (process no longer exists)."""
         try:
-            with open(lock_path, "r") as f:
+            with open(lock_path) as f:
                 content = f.read().strip()
         except OSError:
             # Vanished (owner released it) or unreadable: let the caller retry.

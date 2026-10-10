@@ -4,20 +4,20 @@ Tests for Deferred Formalization Feature
 Tests the ability to derive formal code, rules, and heuristics from prose intent.
 """
 
+from datetime import datetime
+
 import pytest
 
-pytestmark = pytest.mark.llm
-from datetime import datetime
-from pathlib import Path
-
 from intentlog.core import Intent
+from intentlog.llm.provider import MockProvider
 from intentlog.semantic import (
     FormalizationType,
     FormalizedOutput,
     ProvenanceRecord,
     SemanticEngine,
 )
-from intentlog.llm.provider import MockProvider
+
+pytestmark = pytest.mark.llm
 
 
 class TestFormalizationType:

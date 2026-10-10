@@ -7,7 +7,6 @@ violation tracking.
 """
 
 import json
-import os
 import re
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -39,7 +38,7 @@ def audit_logs(file_path: str, max_repeats: int = 3) -> Tuple[bool, List[AuditEr
     Returns:
         Tuple of (passed: bool, errors: List[AuditError])
     """
-    with open(file_path, 'r', encoding='utf-8', errors='replace') as f:
+    with open(file_path, encoding='utf-8', errors='replace') as f:
         logs = f.read()
 
     errors = []
@@ -213,7 +212,7 @@ class ViolationTracker:
         vf = self._violations_file
         if vf and vf.exists():
             try:
-                with open(vf, "r") as f:
+                with open(vf) as f:
                     for line in f:
                         line = line.strip()
                         if not line:

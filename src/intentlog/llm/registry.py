@@ -4,9 +4,9 @@ LLM Provider Registry
 Manages registration and retrieval of LLM providers.
 """
 
-from typing import Dict, Type, List, Optional
-from .provider import LLMProvider, LLMConfig, LLMError
+from typing import Dict, List, Type
 
+from .provider import LLMConfig, LLMError, LLMProvider
 
 # Registry of provider classes
 _providers: Dict[str, Type[LLMProvider]] = {}

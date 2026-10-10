@@ -8,9 +8,8 @@ Provides security-focused input validation to prevent:
 """
 
 import re
-import os
 from pathlib import Path
-from typing import Optional, List
+from typing import List
 
 
 class ValidationError(Exception):
