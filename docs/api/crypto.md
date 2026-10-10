@@ -84,7 +84,9 @@ from intentlog.crypto import sign_intent, verify_intent_signature
 
 # Sign a dictionary of intent data
 data = {"intent_id": "abc123", "intent_hash": "..."}
-signature = sign_intent(data, key_manager, key_name="signing-key")
+signature = sign_intent(
+    data, key_manager, key_name="signing-key", password="optional-password"
+)
 
 # Verify the signature (raises SignatureError if invalid)
 is_valid = verify_intent_signature(data, signature, key_manager)

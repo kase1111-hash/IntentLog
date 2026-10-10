@@ -74,7 +74,7 @@ all = [
 docs = [
     "mkdocs>=1.5.0,<2.0.0",
     "mkdocs-material>=9.0.0,<10.0.0",
-    "mkdocstrings[python]>=0.24.0,<1.0.0",
+    "mkdocstrings[python]>=0.24.0,<2.0.0",
 ]
 [project.scripts]
 intentlog = "intentlog.cli:main"
