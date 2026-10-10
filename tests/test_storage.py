@@ -907,6 +907,40 @@ class TestStrippedFirstEntry:
         assert storage.verify_chain("copy").valid
 
 
+class TestUnreadableChainedEntry:
+    """A chained entry that cannot be parsed is reported, never dropped."""
+
+    @staticmethod
+    def _break_entry(storage, index):
+        path = storage._get_branch_file("main")
+        data = json.loads(path.read_text())
+        del data["intents"][index]["prev_hash"]
+        path.write_text(json.dumps(data, indent=2))
+
+    def test_verify_reports_unreadable_entry(self, initialized_project):
+        storage = initialized_project
+        for name in "abc":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        self._break_entry(storage, 1)
+
+        result = storage.verify_chain()
+
+        assert not result.valid
+        assert result.entries_checked == 3
+
+    def test_commit_does_not_drop_unreadable_entry(self, initialized_project):
+        storage = initialized_project
+        for name in "abc":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        self._break_entry(storage, 1)
+        before = _branch_data(storage)
+
+        with pytest.raises(ChainIntegrityError):
+            storage.add_chained_intent("d", "appended to a damaged branch")
+
+        assert _branch_data(storage) == before
+
+
 class TestBranchNamesOnEveryPath:
     @pytest.mark.parametrize("name", ["../escape", "../../x", "a/b", "bad name"])
     def test_invalid_names_are_not_found_and_create_nothing(self, initialized_project, name):

@@ -242,6 +242,24 @@ def find_project_root(start_path: Optional[Path] = None, max_depth: int = 20) ->
     return None
 
 
+def _placeholder_intent(entry: Dict[str, Any]) -> Intent:
+    """Best-effort Intent for a stored entry that cannot be parsed."""
+    try:
+        timestamp = _parse_datetime(entry.get("timestamp"))
+    except ValueError:
+        timestamp = datetime(1970, 1, 1)
+    metadata = entry.get("metadata")
+    parent = entry.get("parent_intent_id")
+    return Intent(
+        intent_id=str(entry.get("intent_id", "")),
+        intent_name=str(entry.get("intent_name", "")),
+        intent_reasoning=str(entry.get("intent_reasoning", "")),
+        timestamp=timestamp,
+        metadata=metadata if isinstance(metadata, dict) else {},
+        parent_intent_id=parent if isinstance(parent, str) else None,
+    )
+
+
 def _is_chained_data(data: Dict[str, Any]) -> bool:
     """True if raw branch data carries hash-chain information."""
     if "chain_version" in data:
@@ -951,7 +969,20 @@ class IntentLogStorage:
                         parent_intent_id=intent_data.get("parent_intent_id"),
                     )
                     chained.append(intent)
-            except (KeyError, ValueError) as e:
+            except (KeyError, ValueError, TypeError) as e:
+                if isinstance(intent_data, dict) and "chain_hash" in intent_data:
+                    # A chained entry that cannot be read is damage, not noise:
+                    # keep it as a broken entry so verification reports it and
+                    # no later write silently drops it
+                    logger.warning(f"Unreadable chained intent data: {e}")
+                    chained.append(ChainedIntent(
+                        intent=_placeholder_intent(intent_data),
+                        intent_hash="",
+                        prev_hash="",
+                        chain_hash="",
+                        sequence=len(chained),
+                    ))
+                    continue
                 logger.warning(f"Skipping invalid chained intent data: {e}")
                 continue
 
