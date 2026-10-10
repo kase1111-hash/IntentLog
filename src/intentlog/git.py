@@ -175,8 +175,10 @@ grep -q '^#' "$COMMIT_MSG_FILE" 2>/dev/null || exit 0
 # Only add the block when the companion commit-msg hook will remove it again.
 grep -q 'IntentLog commit-msg hook' "$(dirname "$0")/commit-msg" 2>/dev/null || exit 0
 
-# Stay out when git keeps comment lines, in case commit-msg is skipped
-# (git commit --no-verify).
+# Stay out when git is configured to keep comment lines, in case commit-msg
+# is skipped (git commit --no-verify). A --cleanup option given on the
+# command line cannot be seen from here; without --no-verify, commit-msg
+# still removes the block.
 case "$(git config --get commit.cleanup 2>/dev/null)" in
     whitespace|verbatim|scissors) exit 0 ;;
 esac
@@ -197,7 +199,8 @@ INTENT=$(intentlog log --limit 1 2>/dev/null) || exit 0
 
 {
     printf '%s\\n' '__START__'
-    printf '%s\\n' "$INTENT" | sed 's/^/# /'
+    # '# | ' keeps any line of intent text from ever matching a marker
+    printf '%s\\n' "$INTENT" | sed 's/^/# | /'
     printf '%s\\n' '__END__'
 } >> "$COMMIT_MSG_FILE"
 """.replace("__START__", HOOK_BLOCK_START).replace("__END__", HOOK_BLOCK_END)

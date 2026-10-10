@@ -177,7 +177,9 @@ Actions: `install`, `uninstall`, `status`
 `install` adds two hooks. `prepare-commit-msg` shows the latest recorded intent
 as a marked block of comment lines when git opens the commit message editor.
 `commit-msg` removes that block again before git stores the message, so the
-stored commit message never contains it, whatever the cleanup mode. Commits
+stored commit message does not contain it, whatever the cleanup mode. The one
+exception is `git commit --no-verify`, which skips `commit-msg`: the block is
+then dropped only if git strips comment lines, as it does by default. Commits
 made with `-m`, `-F`, a template, `--no-edit`, merges and amends are left
 untouched. Hooks you wrote yourself are never overwritten: `install` does
 nothing if either hook already exists and was not installed by IntentLog.

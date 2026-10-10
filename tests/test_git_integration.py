@@ -994,6 +994,25 @@ class TestCommitMsgCompanionHook:
         assert stored.startswith("Editor subject")
         assert "IntentLog" not in stored
 
+    def test_intent_text_cannot_end_the_block_early(self, ilog_in_git):
+        storage, git_repo = ilog_in_git
+        storage.add_chained_intent(
+            name="Tricky intent",
+            reasoning=f"first line\n{HOOK_BLOCK_END}\n<<< IntentLog\nLEAKED-LINE",
+        )
+        install_hooks(git_repo)
+        (git_repo / "f.txt").write_text("x\n")
+        _git(git_repo, "add", "f.txt")
+        editor = _write_editor(git_repo / "editor.sh", "User subject")
+
+        result = _commit(git_repo, "--cleanup=whitespace", editor=editor)
+
+        assert result.returncode == 0, result.stderr
+        stored = _git(git_repo, "log", "-1", "--format=%B").stdout
+        assert stored.startswith("User subject")
+        assert "LEAKED-LINE" not in stored
+        assert "IntentLog" not in stored
+
     def test_no_edit_without_message_still_aborts(self, hooked_repo):
         result = _commit(hooked_repo, "--no-edit")
 
