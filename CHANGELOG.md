@@ -8,20 +8,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Fixed
-- Concurrent writes no longer lose intents. Writers lock a stable `<branch file>.lock` sidecar, hold one exclusive lock across each read-modify-write, and `FileLock` is re-entrant per thread. `IntentLogStorage.lock_branch()` exposes the lock to callers.
+- Concurrent writes no longer lose intents. Writers hold one exclusive lock across each read-modify-write, and `FileLock` is re-entrant per thread. Lock files live in `.intentlog/temp/locks/`, which `ilog init` has always gitignored. `IntentLogStorage.lock_branch()` exposes the lock to callers.
 - `ilog tag`, `ilog link`, `ilog merge`, `IntentLogStorage.add_intent()`, `create_branch()` and `migrate_to_chain()` no longer strip chain hashes and Ed25519 signatures from hash-chained branches. Unchanged intents are kept verbatim, and only intents from the first changed one onward are re-chained.
 - `BackupManager.create_backup()` and `restore_backup()` no longer crash with a `TypeError`. `log_context()` now stores unknown fields in `extra`.
+- Backups no longer include private signing keys unless `include_keys=True`. Keys saved as `keys/<name>.key` were previously archived.
+- Restoring a backup only ever writes regular files and directories under `.intentlog/`. The whole archive is checked before anything is written or an existing project is moved aside.
 - `check_project_health()` reports real chain verification errors instead of always failing on a missing attribute.
-- The `prepare-commit-msg` hook no longer writes raw JSON into commit messages. It appends a comment-only summary for editor commits, and only when git will strip comments.
+- The git hooks no longer change commit messages. `prepare-commit-msg` shows the latest intent as a marked comment block, only for editor commits, and a new `commit-msg` hook removes that block before git stores the message. Hooks installed by earlier versions show as `outdated` in `ilog hooks status`; re-run `ilog hooks install` to update them.
 - `ilog commit` prints the intent hash that `log`, `show`, `search`, `tag` and `link` use. Lookups also accept a chain-hash prefix.
 - `ilog link` finds targets on other branches.
-- Invalid `--branch` names in `tag` and `link` print an error instead of a traceback.
-- `mkdocs build --strict` passes again, and the API reference only lists members that exist.
+- Invalid `--branch` names in `tag` and `link` print an error instead of a traceback, and so does a branch lock that stays held for more than 10 seconds.
+- `ilog link` no longer holds the source branch's lock while reading other branches, which could deadlock two links in opposite directions.
+- `ilog tag` no longer rewrites an intent when no tag changed.
+- `ilog chain verify` reports entries whose chain data was removed instead of crashing.
+- `mkdocs build --strict` passes again, and the API reference only lists members that exist. The `docs` extra allows mkdocstrings 1.x, which works with current pymdown-extensions.
 - `examples/basic_usage.py`, `benchmarks/run_benchmarks.py` and the pytest-benchmark suite run against the v0.2.0 API.
 - `MANIFEST.in` no longer lists files that were deleted, and `setup.py` defers all metadata to `pyproject.toml`.
 
 ### Added
 - `--force` for `ilog tag` and `ilog link`. Without it they refuse a change that would remove signatures, or that would rewrite chain entries which already fail verification.
+- `--force` for `ilog merge` and `ilog chain migrate`, which otherwise refuse to rewrite a damaged stored chain. `migrate_to_chain()` takes `force=`.
 - `IntentLogStorage.save_intents()` takes `strict=` and returns the number of signatures removed. New exceptions: `SignatureLossError` and `ChainIntegrityError`.
 
 ### Changed
