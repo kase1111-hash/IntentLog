@@ -7,6 +7,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- Concurrent writes no longer lose intents. Writers lock a stable `<branch file>.lock` sidecar, hold one exclusive lock across each read-modify-write, and `FileLock` is re-entrant per thread. `IntentLogStorage.lock_branch()` exposes the lock to callers.
+- `ilog tag`, `ilog link`, `ilog merge`, `IntentLogStorage.add_intent()`, `create_branch()` and `migrate_to_chain()` no longer strip chain hashes and Ed25519 signatures from hash-chained branches. Unchanged intents are kept verbatim, and only intents from the first changed one onward are re-chained.
+- `BackupManager.create_backup()` and `restore_backup()` no longer crash with a `TypeError`. `log_context()` now stores unknown fields in `extra`.
+- `check_project_health()` reports real chain verification errors instead of always failing on a missing attribute.
+- The `prepare-commit-msg` hook no longer writes raw JSON into commit messages. It appends a comment-only summary for editor commits, and only when git will strip comments.
+- `ilog commit` prints the intent hash that `log`, `show`, `search`, `tag` and `link` use. Lookups also accept a chain-hash prefix.
+- `ilog link` finds targets on other branches.
+- Invalid `--branch` names in `tag` and `link` print an error instead of a traceback.
+- `mkdocs build --strict` passes again, and the API reference only lists members that exist.
+- `examples/basic_usage.py`, `benchmarks/run_benchmarks.py` and the pytest-benchmark suite run against the v0.2.0 API.
+- `MANIFEST.in` no longer lists files that were deleted, and `setup.py` defers all metadata to `pyproject.toml`.
+
+### Added
+- `--force` for `ilog tag` and `ilog link`. Without it they refuse a change that would remove signatures, or that would rewrite chain entries which already fail verification.
+- `IntentLogStorage.save_intents()` takes `strict=` and returns the number of signatures removed. New exceptions: `SignatureLossError` and `ChainIntegrityError`.
+
+### Changed
+- The ruff lint job is clean across `src/` and `tests/`.
+
 ## [0.2.0] - 2026-02-10
 
 **"The One That Works"** — A focused refactor that cuts feature creep, adds git integration, and ships a working CLI.
