@@ -140,8 +140,19 @@ ilog diff main..feature   # explicit
 Merge branches.
 
 ```bash
-ilog merge <source> [--message MSG]
+ilog merge <source> [--message MSG] [--force]
 ```
+
+| Option | Description |
+|--------|-------------|
+| `--message, -m` | Also record a merge intent with this reasoning |
+| `--force` | Merge even if the target branch's stored chain is damaged |
+
+Merged intents are appended to the current branch's chain; the intents and
+signatures already on it are kept unchanged. If the stored chain is damaged
+(for example an entry whose chain data was removed by hand), appending would
+rewrite the damaged part and hide it from `ilog chain verify`, so the merge is
+refused unless `--force` is given.
 
 ### blame
 
@@ -163,7 +174,17 @@ ilog hooks <action>
 
 Actions: `install`, `uninstall`, `status`
 
-Installs a `prepare-commit-msg` git hook that prompts for intent when committing.
+`install` adds two hooks. `prepare-commit-msg` shows the latest recorded intent
+as a marked block of comment lines when git opens the commit message editor.
+`commit-msg` removes that block again before git stores the message, so the
+stored commit message never contains it, whatever the cleanup mode. Commits
+made with `-m`, `-F`, a template, `--no-edit`, merges and amends are left
+untouched. Hooks you wrote yourself are never overwritten: `install` does
+nothing if either hook already exists and was not installed by IntentLog.
+
+`status` reports each hook as `installed`, `outdated` (installed by an older
+IntentLog; run `ilog hooks install` again to update it), `foreign` or
+`not installed`.
 
 ### config
 
@@ -297,6 +318,12 @@ Actions: `verify`, `migrate`, `status`, `proof`
 |--------|-------------|
 | `--branch, -b` | Target branch |
 | `--sequence, -s` | Sequence for proof |
+| `--force` | `migrate`: rewrite damaged chain entries anyway |
+
+`migrate` adds chain data to a branch recorded without it, and keeps any chain
+data already stored. It refuses to rewrite stored chain entries that are
+damaged, because that would hide the damage from `verify`, unless `--force` is
+given.
 
 ## Formalization Commands
 

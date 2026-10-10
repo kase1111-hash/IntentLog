@@ -296,16 +296,18 @@ class IntentLogStorage:
 
     def _get_lock_file(self, file_path: Path) -> Path:
         """
-        Get the lock sidecar path ('<file>.lock') for a data file.
+        Get the lock file path for a data file under .intentlog/.
 
-        The lock is taken on a stable sidecar rather than on the data file:
-        _atomic_write_json() replaces the data file with os.replace(), which
-        would leave existing lock holders attached to an unlinked inode while
-        new lockers open the replacement, so locks on the data file itself do
-        not serialize writers. The '.lock' suffix keeps sidecars out of
-        list_branches(), which only accepts '.json' files.
+        Locks live in .intentlog/temp/locks/, mirroring the data file's path
+        (e.g. temp/locks/branches/feature.json.lock). They are taken on a
+        separate, stable file rather than on the data file itself, because
+        _atomic_write_json() replaces data files with os.replace(), which
+        would leave lock holders attached to an unlinked inode. temp/ is in
+        the .gitignore that 'ilog init' writes, so locks never show up as
+        untracked files.
         """
-        return Path(str(file_path) + ".lock")
+        relative = Path(file_path).relative_to(self.intentlog_dir)
+        return self.intentlog_dir / "temp" / "locks" / relative.parent / (relative.name + ".lock")
 
     def _lock_file(self, file_path: Path, exclusive: bool = True):
         """
@@ -341,7 +343,7 @@ class IntentLogStorage:
 
         Raises:
             ProjectNotFoundError: If project not initialized
-            ValidationError: If an explicit branch name is invalid
+            ValidationError: If the branch name is invalid
             FileLockTimeout: If the lock cannot be acquired within lock_timeout
 
         Usage:
@@ -351,15 +353,12 @@ class IntentLogStorage:
                 storage.save_intents(intents, branch)
         """
         # Resolve and validate BEFORE locking: acquiring the lock creates the
-        # sidecar file (and its parent directory), so an uninitialized project
+        # lock file (and its parent directories), so an uninitialized project
         # must raise first, or a stray .intentlog/ would shadow the real
-        # project root; likewise a traversal-style name must never reach
-        # _get_branch_file().
+        # project root; likewise a traversal-style name, whether passed in or
+        # read from config.json, must never reach _get_branch_file().
         config = self.load_config()
-        if branch:
-            branch = validate_branch_name(branch)
-        else:
-            branch = config.current_branch
+        branch = validate_branch_name(branch or config.current_branch)
         with self._lock_file(self._get_branch_file(branch), exclusive=True):
             yield branch
 
@@ -426,7 +425,6 @@ class IntentLogStorage:
             f.write("violations.jsonl\n")
             f.write("network_audit.jsonl\n")
             f.write("temp/\n")
-            f.write("*.lock\n")
 
         logger.info("Project initialized successfully", project=project_name)
         return config
@@ -628,10 +626,16 @@ class IntentLogStorage:
             keep += 1
 
         # Stored entries from `keep` on are about to be replaced.
+        branch_is_chained = _is_chained_data(existing)
         broken_at = None
         for i in range(keep, len(raw_entries)):
             if "chain_hash" not in raw_entries[i]:
-                continue  # plain entries carry no chain claims to verify
+                if branch_is_chained:
+                    # On a chained branch every entry must carry chain data;
+                    # a missing one means it was stripped by hand.
+                    broken_at = i
+                    break
+                continue  # legacy plain branch: nothing to verify
             if i >= len(stored):
                 broken_at = i
                 break
@@ -938,6 +942,15 @@ class IntentLogStorage:
         if chained and isinstance(chained[0], Intent):
             plain_intents = [c if isinstance(c, Intent) else c.intent for c in chained]
             chained = chain_intents(plain_intents)
+        elif any(isinstance(c, Intent) for c in chained):
+            # A chained branch with entries whose chain data was removed.
+            # Keep them in place with empty hashes so verification reports
+            # the break instead of failing on the mixed list.
+            chained = [
+                c if not isinstance(c, Intent)
+                else ChainedIntent(intent=c, intent_hash="", prev_hash="", chain_hash="", sequence=i)
+                for i, c in enumerate(chained)
+            ]
 
         return chained
 
@@ -1105,15 +1118,27 @@ class IntentLogStorage:
         chained = self.load_chained_intents(branch)
         return generate_inclusion_proof(chained, sequence)
 
-    def migrate_to_chain(self, branch: Optional[str] = None) -> int:
+    def migrate_to_chain(self, branch: Optional[str] = None, force: bool = False) -> int:
         """
         Migrate legacy intents to chain format.
 
+        Chain data already stored is kept as it is. If part of the stored
+        chain would have to be rewritten because it is unreadable or was
+        stripped, the migration is refused unless forced, because the rewrite
+        would hide that damage from 'ilog chain verify'.
+
         Args:
             branch: Branch to migrate. If None, uses current branch.
+            force: Rewrite damaged chain data anyway (removing any signatures
+                on the rewritten entries).
 
         Returns:
             Number of intents migrated
+
+        Raises:
+            ChainIntegrityError: If not forced and damaged chain data would be
+                rewritten
+            SignatureLossError: If not forced and signatures would be removed
         """
         with self.lock_branch(branch) as locked_branch:
             intents = self.load_intents(locked_branch)
@@ -1122,7 +1147,9 @@ class IntentLogStorage:
 
             # Chain them, keeping any chain data (and signatures) already stored
             existing = self._read_branch_data(self._get_branch_file(locked_branch))
-            chained, _ = self._rechain_preserving(locked_branch, existing, intents)
+            chained, _ = self._rechain_preserving(
+                locked_branch, existing, intents, strict=not force
+            )
 
             # Save with chain data
             self.save_chained_intents(chained, locked_branch)

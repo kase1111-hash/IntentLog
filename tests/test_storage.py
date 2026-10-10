@@ -541,24 +541,42 @@ class TestConcurrentAccess:
         assert storage.load_intents("main") == []
 
     @pytest.mark.skipif(LOCK_BACKEND == "none", reason="fallback backend removes its lock file")
-    def test_lock_sidecar_is_not_listed_as_branch(self, initialized_project):
-        """Locks live on '<file>.lock' sidecars that list_branches() ignores"""
+    def test_lock_files_live_under_temp(self, initialized_project):
+        """Locks live in .intentlog/temp/locks/, never next to the data files"""
         storage = initialized_project
         storage.create_branch("feature")
-        storage.add_intent("On feature", "sidecar test", branch="feature")
-        storage.add_intent("On main", "sidecar test")
+        storage.add_intent("On feature", "lock file test", branch="feature")
+        storage.add_intent("On main", "lock file test")
 
-        assert (storage.branches_dir / "feature.json.lock").is_file()
-        assert (storage.intentlog_dir / "intents.json.lock").is_file()
+        locks = storage.intentlog_dir / "temp" / "locks"
+        assert (locks / "branches" / "feature.json.lock").is_file()
+        assert (locks / "intents.json.lock").is_file()
+        assert not list(storage.intentlog_dir.glob("*.lock"))
+        assert not list(storage.branches_dir.glob("*.lock"))
         assert storage.list_branches() == ["feature", "main"]
         # The data file itself is still the only thing read back
         with open(storage.branches_dir / "feature.json") as f:
             assert len(json.load(f)["intents"]) == 1
 
     def test_gitignore_excludes_lock_files(self, initialized_project):
-        """init writes '*.lock' into .intentlog/.gitignore"""
+        """Lock files sit under temp/, which init has always written to .gitignore"""
         gitignore = initialized_project.intentlog_dir / ".gitignore"
-        assert "*.lock" in gitignore.read_text().splitlines()
+        assert "temp/" in gitignore.read_text().splitlines()
+
+    def test_config_branch_name_is_validated_before_locking(self, initialized_project):
+        """A traversal-style current_branch in config.json never creates files"""
+        storage = initialized_project
+        config_file = storage.intentlog_dir / "config.json"
+        config = json.loads(config_file.read_text())
+        config["current_branch"] = "../../escape"
+        config_file.write_text(json.dumps(config))
+        project_root = storage.intentlog_dir.parent
+
+        with pytest.raises(ValidationError):
+            storage.add_intent("a", "b")
+
+        assert not list(project_root.rglob("escape*"))
+        assert not list(project_root.parent.glob("escape*"))
 
 
 class TestLockBranchSideEffects:
@@ -772,6 +790,57 @@ class TestChainPreservation:
         storage.add_intent("c", "appended after tampering")
 
         assert not storage.verify_chain().valid
+
+
+class TestStrippedChainEntries:
+    """Entries whose chain data was removed by hand are treated as damage."""
+
+    @staticmethod
+    def _strip_last(storage):
+        path = storage._get_branch_file("main")
+        data = json.loads(path.read_text())
+        for key in ("intent_hash", "prev_hash", "chain_hash", "sequence", "signature"):
+            data["intents"][-1].pop(key, None)
+        data["intents"][-1]["intent_reasoning"] = "rewritten after the fact"
+        path.write_text(json.dumps(data, indent=2))
+
+    def test_verify_reports_instead_of_crashing(self, initialized_project):
+        storage = initialized_project
+        for name in "ab":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        self._strip_last(storage)
+
+        result = storage.verify_chain()
+
+        assert not result.valid
+        assert result.broken_at == 1
+
+    def test_strict_rewrite_of_stripped_entry_is_refused(self, initialized_project):
+        storage = initialized_project
+        for name in "ab":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        self._strip_last(storage)
+        before = _branch_data(storage)
+
+        intents = storage.load_intents()
+        intents[1].metadata["tags"] = ["x"]
+        with pytest.raises(ChainIntegrityError):
+            storage.save_intents(intents, strict=True)
+
+        assert _branch_data(storage) == before
+
+    def test_migrate_refuses_unless_forced(self, initialized_project):
+        storage = initialized_project
+        for name in "ab":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        self._strip_last(storage)
+
+        with pytest.raises(ChainIntegrityError):
+            storage.migrate_to_chain()
+        assert not storage.verify_chain().valid
+
+        assert storage.migrate_to_chain(force=True) == 2
+        assert storage.verify_chain().valid
 
 
 @pytest.mark.skipif(not CRYPTO_AVAILABLE, reason="cryptography not installed")

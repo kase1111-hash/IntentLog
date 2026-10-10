@@ -10,6 +10,7 @@ import sys
 from pathlib import Path
 
 from ..audit import audit_logs, print_audit_results
+from ..filelock import FileLockTimeout
 from ..git import detect_git_repo, get_git_context
 from ..storage import (
     BranchExistsError,
@@ -21,7 +22,7 @@ from ..storage import (
     SignatureLossError,
     compute_intent_hash,
 )
-from ..validation import ValidationError
+from ..validation import ValidationError, validate_branch_name
 from .utils import (
     format_timestamp,
     get_semantic_engine,
@@ -534,6 +535,7 @@ def cmd_merge(args):
     """Merge branches with LLM-assisted conflict resolution"""
     source_branch = args.source
     message = getattr(args, 'message', None)
+    force = getattr(args, 'force', False)
 
     storage = IntentLogStorage()
 
@@ -561,11 +563,20 @@ def cmd_merge(args):
 
             print(f"Merging {len(new_intents)} intent(s) from '{source_branch}' into '{target_branch}'...")
 
-            # Add new intents to target
+            # Add new intents to target. Appending never rewrites the target's
+            # chain, unless its stored chain is damaged: then refuse unless
+            # --force, so the merge cannot hide the damage.
             for intent in new_intents:
                 target_intents.append(intent)
 
-            storage.save_intents(target_intents, target_branch)
+            try:
+                removed = storage.save_intents(target_intents, target_branch, strict=not force)
+            except (ChainIntegrityError, SignatureLossError) as e:
+                print(f"Error: {e}.")
+                print("Re-run with --force to merge anyway.")
+                sys.exit(1)
+            if removed:
+                print(f"Warning: removed {removed} signature(s) invalidated by this merge.")
 
             # Create merge commit if message provided
             if message:
@@ -580,6 +591,8 @@ def cmd_merge(args):
     except (BranchNotFoundError, ValidationError) as e:
         print(f"Error: {e}")
         sys.exit(1)
+    except FileLockTimeout as e:
+        _lock_timeout_exit(e)
 
     print(f"Merged {len(new_intents)} intent(s) from '{source_branch}'")
 
@@ -817,6 +830,8 @@ def cmd_hooks(args):
         print("Git hook status:")
         for hook, state in status.items():
             print(f"  {hook}: {state}")
+        if "outdated" in status.values():
+            print("Run 'ilog hooks install' to update outdated hooks.")
 
     else:
         print(f"Unknown action: {action}")
@@ -888,6 +903,13 @@ def cmd_blame(args):
         print()
 
 
+def _lock_timeout_exit(error):
+    """Report a lock that another ilog process held for too long, then exit."""
+    print(f"Error: {error}")
+    print("Another ilog command is still writing to this branch; try again.")
+    sys.exit(1)
+
+
 def _save_annotation(storage, intents, branch, force):
     """
     Save intents after a metadata edit (tag or link).
@@ -930,10 +952,12 @@ def cmd_tag(args):
 
             # Report changes only once they are saved
             notes = []
+            changed = False
             if remove:
                 for tag in tags:
                     if tag in current_tags:
                         current_tags.remove(tag)
+                        changed = True
                         notes.append(f"  Removed tag: {tag}")
                     else:
                         notes.append(f"  Tag not found: {tag}")
@@ -941,17 +965,22 @@ def cmd_tag(args):
                 for tag in tags:
                     if tag not in current_tags:
                         current_tags.append(tag)
+                        changed = True
                         notes.append(f"  Added tag: {tag}")
                     else:
                         notes.append(f"  Already tagged: {tag}")
 
-            found.metadata["tags"] = current_tags
-            _save_annotation(storage, intents, branch, force)
+            # Tags are hashed content: only rewrite the intent if they changed
+            if changed:
+                found.metadata["tags"] = current_tags
+                _save_annotation(storage, intents, branch, force)
             for note in notes:
                 print(note)
     except (ProjectNotFoundError, ValidationError) as e:
         print(f"Error: {e}")
         sys.exit(1)
+    except FileLockTimeout as e:
+        _lock_timeout_exit(e)
 
     intent_hash = compute_intent_hash(found)
     print(f"[{intent_hash}] tags: {', '.join(current_tags) if current_tags else '(none)'}")
@@ -991,13 +1020,22 @@ def cmd_link(args):
     storage = IntentLogStorage()
 
     try:
+        # Resolve the target first, without holding any lock: it only reads,
+        # and taking other branches' locks while holding this one could
+        # deadlock against a link in the opposite direction.
+        source_branch = validate_branch_name(branch or storage.load_config().current_branch)
+        try:
+            target, target_branch = _resolve_link_target(storage, target_id, source_branch)
+        except BranchNotFoundError as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+        if target is None:
+            print(f"Error: No intent matching '{target_id}' on any branch")
+            sys.exit(1)
+
         # Hold the source branch lock for the whole load -> mutate -> save sequence
-        with storage.lock_branch(branch) as branch:
+        with storage.lock_branch(source_branch) as branch:
             source, intents, branch = _find_intent(storage, source_id, branch)
-            target, target_branch = _resolve_link_target(storage, target_id, branch)
-            if target is None:
-                print(f"Error: No intent matching '{target_id}' on any branch")
-                sys.exit(1)
 
             # Add link to source intent's metadata
             links = source.metadata.get("links", [])
@@ -1013,6 +1051,8 @@ def cmd_link(args):
     except (ProjectNotFoundError, ValidationError) as e:
         print(f"Error: {e}")
         sys.exit(1)
+    except FileLockTimeout as e:
+        _lock_timeout_exit(e)
 
     source_hash = compute_intent_hash(source)
     target_hash = compute_intent_hash(target)
@@ -1085,6 +1125,8 @@ def register_core_commands(subparsers):
     merge_parser = subparsers.add_parser("merge", help="Merge branches")
     merge_parser.add_argument("source", help="Source branch to merge from")
     merge_parser.add_argument("--message", "-m", help="Merge commit message")
+    merge_parser.add_argument("--force", action="store_true",
+                              help="Merge even if the target branch's stored chain is damaged")
     merge_parser.set_defaults(func=cmd_merge)
 
     # config command

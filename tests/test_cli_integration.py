@@ -608,3 +608,84 @@ class TestSignedAnnotations:
         feat = _branch_entries(temp_project_dir / ".intentlog" / "branches" / "feat.json")
         assert feat[0].get("signature")
 
+
+def _damage_last_entry(intents_file):
+    """Remove the chain data from the newest stored entry, as a hand edit would."""
+    with open(intents_file) as f:
+        data = json.load(f)
+    for key in ("intent_hash", "prev_hash", "chain_hash", "sequence"):
+        data["intents"][-1].pop(key, None)
+    with open(intents_file, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+class TestDamagedChainCommands:
+    """Commands that would rewrite a damaged chain refuse unless --force"""
+
+    def test_merge_into_damaged_branch_needs_force(self, temp_project_dir):
+        run_ilog("init", "test-project")
+        run_ilog("commit", "first")
+        run_ilog("commit", "second")
+        run_ilog("branch", "feat")
+        run_ilog("commit", "on feat")
+        run_ilog("branch", "main")
+        intents_file = temp_project_dir / ".intentlog" / "intents.json"
+        _damage_last_entry(intents_file)
+        before = _branch_entries(intents_file)
+
+        result = run_ilog("merge", "feat")
+        assert result.returncode == 1
+        assert "--force" in result.stdout
+        assert "Traceback" not in result.stdout + result.stderr
+        assert _branch_entries(intents_file) == before
+
+        result = run_ilog("merge", "feat", "--force")
+        assert result.returncode == 0, result.stdout
+
+    def test_chain_migrate_on_damaged_branch_needs_force(self, temp_project_dir):
+        run_ilog("init", "test-project")
+        run_ilog("commit", "first")
+        run_ilog("commit", "second")
+        intents_file = temp_project_dir / ".intentlog" / "intents.json"
+        _damage_last_entry(intents_file)
+
+        result = run_ilog("chain", "migrate")
+        assert result.returncode == 1
+        assert "--force" in result.stdout
+        assert run_ilog("chain", "verify").returncode == 1
+
+        result = run_ilog("chain", "migrate", "--force")
+        assert result.returncode == 0, result.stdout
+        assert run_ilog("chain", "verify").returncode == 0
+
+
+class TestTagNoOp:
+    def test_removing_absent_tag_rewrites_nothing(self, temp_project_dir):
+        run_ilog("init", "test-project")
+        run_ilog("commit", "first")
+        run_ilog("commit", "second")
+        intents_file = temp_project_dir / ".intentlog" / "intents.json"
+        before = _branch_entries(intents_file)
+
+        result = run_ilog("tag", before[0]["intent_id"][:8], "nothere", "--remove")
+
+        assert result.returncode == 0, result.stdout
+        assert "Tag not found: nothere" in result.stdout
+        assert _branch_entries(intents_file) == before
+
+    @pytest.mark.skipif(not CRYPTO_AVAILABLE, reason="cryptography not installed")
+    def test_adding_existing_tag_on_signed_chain_needs_no_force(self, temp_project_dir):
+        run_ilog("init", "test-project")
+        run_ilog("keys", "generate", "--name", "k")
+        intents_file = temp_project_dir / ".intentlog" / "intents.json"
+        run_ilog("commit", "--sign", "signed")
+        intent_id = _branch_entries(intents_file)[0]["intent_id"]
+        assert run_ilog("tag", intent_id[:8], "x", "--force").returncode == 0
+        before = _branch_entries(intents_file)
+
+        result = run_ilog("tag", intent_id[:8], "x")
+
+        assert result.returncode == 0, result.stdout
+        assert "Already tagged: x" in result.stdout
+        assert _branch_entries(intents_file) == before
+

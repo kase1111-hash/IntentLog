@@ -6,7 +6,13 @@ Commands: keys, chain
 
 import sys
 
-from ..storage import BranchNotFoundError, IntentLogStorage, ProjectNotFoundError
+from ..storage import (
+    BranchNotFoundError,
+    ChainIntegrityError,
+    IntentLogStorage,
+    ProjectNotFoundError,
+    SignatureLossError,
+)
 from .utils import load_config_or_exit
 
 
@@ -150,7 +156,12 @@ def cmd_chain(args):
     elif action == "migrate":
         print(f"Migrating branch '{branch}' to chain format...")
 
-        count = storage.migrate_to_chain(branch)
+        try:
+            count = storage.migrate_to_chain(branch, force=getattr(args, "force", False))
+        except (ChainIntegrityError, SignatureLossError) as e:
+            print(f"Error: {e}.")
+            print("Re-run with --force to rewrite the damaged entries anyway.")
+            sys.exit(1)
 
         if count > 0:
             print(f"Migrated {count} intents to chain format.")
@@ -230,4 +241,6 @@ def register_crypto_commands(subparsers):
     chain_parser.add_argument("--branch", "-b", help="Branch to operate on")
     chain_parser.add_argument("--sequence", "-s", type=int,
                               help="Sequence number for proof")
+    chain_parser.add_argument("--force", action="store_true",
+                              help="migrate: rewrite damaged chain entries anyway")
     chain_parser.set_defaults(func=cmd_chain)
