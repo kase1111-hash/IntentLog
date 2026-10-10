@@ -1,9 +1,8 @@
 """Tests for IntentLog audit functionality"""
+import pytest
+import tempfile
 import os
 import sys
-import tempfile
-
-import pytest
 
 # Add scripts directory to path
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'scripts'))

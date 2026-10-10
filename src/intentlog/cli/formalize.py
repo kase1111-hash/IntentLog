@@ -7,8 +7,9 @@ Commands: formalize
 import sys
 from pathlib import Path
 
+from ..storage import IntentLogStorage, ProjectNotFoundError, BranchNotFoundError
 from ..semantic import FormalizationType, SemanticEngine
-from ..storage import BranchNotFoundError, IntentLogStorage, ProjectNotFoundError
+from .utils import load_config_or_exit
 
 
 def cmd_formalize(args):

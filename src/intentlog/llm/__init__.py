@@ -6,14 +6,14 @@ diffs, search, and merge conflict resolution.
 """
 
 from .provider import (
-    AuthenticationError,
-    LLMConfig,
-    LLMError,
     LLMProvider,
+    LLMConfig,
     LLMResponse,
+    LLMError,
     RateLimitError,
+    AuthenticationError,
 )
-from .registry import get_provider, list_providers, register_provider
+from .registry import get_provider, register_provider, list_providers
 
 __all__ = [
     "LLMProvider",

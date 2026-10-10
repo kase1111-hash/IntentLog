@@ -5,9 +5,10 @@ Provides helper functions for detecting git repositories, capturing
 git context (branch, HEAD, staged files), and managing git hooks.
 """
 
+import os
 import subprocess
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Optional, Dict, Any, List
 
 
 def _run_git(*args: str, cwd: Optional[Path] = None) -> Optional[str]:

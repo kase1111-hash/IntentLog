@@ -11,12 +11,12 @@ Features:
 - Branch divergence handling
 """
 
-import hashlib
 import json
+import hashlib
 import logging
-from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import List, Optional, Dict, Any, Tuple
+from dataclasses import dataclass, field
 
 from .core import Intent
 

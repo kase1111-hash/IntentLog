@@ -9,12 +9,12 @@ Provides statistical analysis and insights for intent logs:
 - Report generation
 """
 
-import json
-import statistics
-from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timedelta
-from typing import Any, Dict, List, Optional, Tuple
+from typing import List, Optional, Dict, Any, Tuple
+from collections import Counter
+import statistics
+import json
 
 from .core import Intent
 

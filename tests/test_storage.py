@@ -15,6 +15,7 @@ import pytest
 from intentlog.core import Intent
 from intentlog.filelock import LOCK_BACKEND, FileLock, FileLockError, FileLockTimeout
 from intentlog.storage import (
+    INTENTLOG_DIR,
     BranchExistsError,
     BranchNotFoundError,
     IntentLogStorage,
@@ -24,6 +25,7 @@ from intentlog.storage import (
     compute_intent_hash,
     find_project_root,
 )
+from intentlog.validation import ValidationError
 
 
 @pytest.fixture
@@ -554,3 +556,70 @@ class TestConcurrentAccess:
         """init writes '*.lock' into .intentlog/.gitignore"""
         gitignore = initialized_project.intentlog_dir / ".gitignore"
         assert "*.lock" in gitignore.read_text().splitlines()
+
+
+class TestLockBranchSideEffects:
+    """lock_branch() must validate before it creates any lock sidecar"""
+
+    @staticmethod
+    def _failing_writes():
+        """Write paths that route through lock_branch() with an explicit branch"""
+        return [
+            ("add_intent", lambda s, b: s.add_intent("n", "r", branch=b)),
+            ("add_chained_intent", lambda s, b: s.add_chained_intent("n", "r", branch=b)),
+            ("migrate_to_chain", lambda s, b: s.migrate_to_chain(b)),
+            ("lock_branch", lambda s, b: s.lock_branch(b).__enter__()),
+        ]
+
+    def test_uninitialized_dir_raises_without_creating_intentlog(self, temp_project_dir):
+        """A failed write on an uninitialized dir leaves no .intentlog/ behind"""
+        for label, call in self._failing_writes():
+            target = temp_project_dir / label
+            target.mkdir()
+            storage = IntentLogStorage(target)
+            with pytest.raises(ProjectNotFoundError):
+                call(storage, "main")
+            assert not (target / INTENTLOG_DIR).exists(), label
+            assert list(target.iterdir()) == [], label
+            assert not storage.is_initialized()
+
+    def test_failed_write_in_subdir_does_not_shadow_project_root(self, initialized_project):
+        """A stray .intentlog/ in a subdirectory would hijack find_project_root()"""
+        root = initialized_project.project_root
+        sub = root / "src" / "pkg"
+        sub.mkdir(parents=True)
+        assert find_project_root(sub) == root
+
+        with pytest.raises(ProjectNotFoundError):
+            IntentLogStorage(sub).add_intent("n", "r", branch="main")
+
+        assert not (sub / INTENTLOG_DIR).exists()
+        assert find_project_root(sub) == root
+
+    def test_traversal_branch_name_raises_without_creating_files(self, initialized_project):
+        """A traversal-style branch name is rejected before any lock file is created"""
+        storage = initialized_project
+        root = storage.project_root
+        before = set(root.rglob("*"))
+
+        for label, call in self._failing_writes():
+            with pytest.raises(ValidationError):
+                call(storage, "../../outside")
+            with pytest.raises(ValidationError):
+                call(storage, "../../../escaped")
+            assert set(root.rglob("*")) == before, label
+
+        assert not (root / "outside.json.lock").exists()
+        assert not (root.parent / "escaped.json.lock").exists()
+        assert storage.list_branches() == ["main"]
+
+    def test_lock_branch_accepts_valid_names(self, initialized_project):
+        """Validation does not reject ordinary branch names, including main"""
+        storage = initialized_project
+        storage.create_branch("feature-x.1_y")
+        with storage.lock_branch("main") as branch:
+            assert branch == "main"
+        with storage.lock_branch("feature-x.1_y") as branch:
+            assert branch == "feature-x.1_y"
+            storage.add_intent("n", "r", branch=branch)
+        assert len(storage.load_intents("feature-x.1_y")) == 1

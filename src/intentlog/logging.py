@@ -13,7 +13,6 @@ import json
 import logging
 import os
 import sys
-import threading
 import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field, fields
@@ -120,6 +119,7 @@ class LogContext:
 
 
 # Thread-local context storage
+import threading
 _context_local = threading.local()
 
 

@@ -8,19 +8,23 @@ Commands: init, commit, branch, log, search, audit, status, diff, merge, config,
 import json as _json
 import sys
 from pathlib import Path
+from datetime import datetime
 
-from ..audit import audit_logs, print_audit_results
-from ..git import detect_git_repo, get_git_context
 from ..storage import (
-    BranchExistsError,
-    BranchNotFoundError,
     IntentLogStorage,
-    ProjectExistsError,
     ProjectNotFoundError,
+    ProjectExistsError,
+    BranchNotFoundError,
+    BranchExistsError,
     compute_intent_hash,
 )
+from ..git import detect_git_repo, get_git_context
+from ..audit import audit_logs, print_audit_results
 from .utils import (
+    get_storage,
+    load_config_or_exit,
     format_timestamp,
+    format_hash,
     get_semantic_engine,
 )
 
@@ -482,6 +486,7 @@ def cmd_diff(args):
         print(f"Comparing '{branch_a}' ({len(intents_a)} intents) to '{branch_b}' ({len(intents_b)} intents)\n")
 
         a_ids = {i.intent_id for i in intents_a}
+        b_ids = {i.intent_id for i in intents_b}
 
         new_in_b = [i for i in intents_b if i.intent_id not in a_ids]
         if new_in_b:
@@ -679,14 +684,14 @@ def cmd_show(args):
     # Git context
     git_ctx = found.metadata.get("git_context", {})
     if git_ctx:
-        print("\nGit Context:")
+        print(f"\nGit Context:")
         if git_ctx.get("branch"):
             print(f"  Branch: {git_ctx['branch']}")
         if git_ctx.get("commit"):
             print(f"  Commit: {git_ctx['commit']}")
         staged = git_ctx.get("staged_files", [])
         if staged:
-            print("  Staged files:")
+            print(f"  Staged files:")
             for f in staged[:20]:
                 print(f"    {f}")
             if len(staged) > 20:
@@ -695,7 +700,7 @@ def cmd_show(args):
     # Attached files
     attached = found.metadata.get("attached_files", {})
     if attached:
-        print("\nAttached Files:")
+        print(f"\nAttached Files:")
         for fpath, fhash in list(attached.items())[:20]:
             print(f"  {fhash} {fpath}")
 
@@ -707,7 +712,7 @@ def cmd_show(args):
     # Links
     links = found.metadata.get("links", [])
     if links:
-        print("\nLinked intents:")
+        print(f"\nLinked intents:")
         for link_id in links:
             print(f"  -> {link_id[:12]}")
 
@@ -715,7 +720,7 @@ def cmd_show(args):
     _displayed = ("git_context", "attached_files", "tags", "links")
     other_meta = {k: v for k, v in found.metadata.items() if k not in _displayed}
     if other_meta:
-        print("\nMetadata:")
+        print(f"\nMetadata:")
         for k, v in other_meta.items():
             print(f"  {k}: {v}")
 
@@ -737,7 +742,7 @@ def cmd_hooks(args):
         print("Run 'ilog init' in a git repository first.")
         sys.exit(1)
 
-    from ..git import hooks_status, install_hooks, uninstall_hooks
+    from ..git import install_hooks, uninstall_hooks, hooks_status
 
     git_root = Path(config.git_root)
 
@@ -841,7 +846,7 @@ def cmd_blame(args):
                 print(f"  Intent: {intent.intent_name}")
                 print(f"    {reasoning}")
         else:
-            print("  (no intent recorded)")
+            print(f"  (no intent recorded)")
         print()
 
 

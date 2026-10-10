@@ -5,13 +5,14 @@ Commands: export, analytics, metrics
 """
 
 import sys
-from datetime import datetime
 from pathlib import Path
+from datetime import datetime
 
+from ..storage import IntentLogStorage, ProjectNotFoundError, BranchNotFoundError
+from ..export import IntentExporter, ExportFilter, ExportFormat, AnonymizationConfig
 from ..analytics import IntentAnalytics, generate_summary
-from ..export import AnonymizationConfig, ExportFilter, ExportFormat, IntentExporter
 from ..metrics import IntentMetrics
-from ..storage import BranchNotFoundError, IntentLogStorage, ProjectNotFoundError
+from .utils import load_config_or_exit
 
 
 def cmd_export(args):
@@ -74,7 +75,7 @@ def cmd_export(args):
         print(f"Exported {stats['filtered_intents']} intents to {output}")
         print(f"  Format: {format_type}")
         if anonymize:
-            print("  Anonymized: Yes")
+            print(f"  Anonymized: Yes")
         if stats['filter_ratio'] < 1.0:
             print(f"  Filtered: {stats['total_intents']} -> {stats['filtered_intents']}")
     else:

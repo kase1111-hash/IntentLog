@@ -5,10 +5,10 @@ This module provides the fundamental data structures and operations for
 managing intent logs.
 """
 
-import uuid
 from dataclasses import dataclass, field
+from typing import Optional, Dict, Any, List
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+import uuid
 
 
 @dataclass

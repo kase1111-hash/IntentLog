@@ -5,9 +5,10 @@ Tests the security hardening introduced by the security audit remediation.
 """
 
 import io
-import json
 import os
+import json
 import tarfile
+import tempfile
 from pathlib import Path
 from unittest.mock import patch
 
@@ -86,19 +87,19 @@ class TestKeyNameValidation:
     """Test that key names are validated to prevent path traversal."""
 
     def test_rejects_path_traversal_in_key_name(self):
-        from intentlog.validation import InvalidNameError, validate_key_name
+        from intentlog.validation import validate_key_name, InvalidNameError
 
         with pytest.raises(InvalidNameError):
             validate_key_name("../../etc/cron.d/evil")
 
     def test_rejects_absolute_path_key_name(self):
-        from intentlog.validation import InvalidNameError, validate_key_name
+        from intentlog.validation import validate_key_name, InvalidNameError
 
         with pytest.raises(InvalidNameError):
             validate_key_name("/etc/passwd")
 
     def test_rejects_empty_key_name(self):
-        from intentlog.validation import InvalidNameError, validate_key_name
+        from intentlog.validation import validate_key_name, InvalidNameError
 
         with pytest.raises(InvalidNameError):
             validate_key_name("")
@@ -194,7 +195,7 @@ class TestSecretScanning:
         assert scan_for_secrets("This is a normal prompt about coding.") == []
 
     def test_check_outbound_raises_on_secrets(self):
-        from intentlog.llm.provider import SecretLeakageError, check_outbound_content
+        from intentlog.llm.provider import check_outbound_content, SecretLeakageError
 
         with patch.dict(os.environ, {}, clear=False):
             # Ensure override is not set
@@ -216,7 +217,7 @@ class TestViolationTracker:
     """Test constitutional violation tracking."""
 
     def test_record_and_retrieve_in_memory(self):
-        from intentlog.audit import VIOLATION_INJECTION_PATTERN, ViolationTracker
+        from intentlog.audit import ViolationTracker, VIOLATION_INJECTION_PATTERN
 
         tracker = ViolationTracker()
         tracker.record_violation(
@@ -229,7 +230,7 @@ class TestViolationTracker:
         assert violations[0].severity == "high"
 
     def test_record_to_file(self, tmp_path):
-        from intentlog.audit import VIOLATION_SECRET_IN_OUTBOUND, ViolationTracker
+        from intentlog.audit import ViolationTracker, VIOLATION_SECRET_IN_OUTBOUND
 
         tracker = ViolationTracker(tmp_path)
         tracker.record_violation(
@@ -279,6 +280,7 @@ class TestExportPathContainment:
     def test_rejects_etc_path(self):
         # We can't fully test export without setting up intents,
         # but we can test the path validation logic
+        from pathlib import Path
 
         resolved = Path("/etc/passwd").resolve()
         blocked = ("/etc", "/usr", "/bin", "/sbin", "/boot", "/proc", "/sys")
@@ -291,9 +293,8 @@ class TestBaseUrlAllowlist:
     """Test LLMConfig base_url validation."""
 
     def test_unknown_domain_warns(self):
-        import warnings
-
         from intentlog.llm.provider import LLMConfig
+        import warnings
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
@@ -302,9 +303,8 @@ class TestBaseUrlAllowlist:
             assert "unknown domain" in str(w[0].message).lower()
 
     def test_known_domain_no_warning(self):
-        import warnings
-
         from intentlog.llm.provider import LLMConfig
+        import warnings
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
@@ -314,9 +314,8 @@ class TestBaseUrlAllowlist:
             assert len(url_warnings) == 0
 
     def test_localhost_no_warning(self):
-        import warnings
-
         from intentlog.llm.provider import LLMConfig
+        import warnings
 
         with warnings.catch_warnings(record=True) as w:
             warnings.simplefilter("always")
@@ -331,7 +330,7 @@ class TestApprovalGates:
     """Test that destructive operations require confirmation."""
 
     def test_delete_backup_requires_confirm(self, tmp_path):
-        from intentlog.backup import BackupError, BackupManager
+        from intentlog.backup import BackupManager, BackupError
 
         manager = BackupManager.__new__(BackupManager)
         manager.backup_dir = tmp_path
@@ -400,13 +399,13 @@ class TestNullByteRejection:
     """Test that null bytes in names are rejected."""
 
     def test_rejects_null_byte_in_key_name(self):
-        from intentlog.validation import InvalidNameError, validate_key_name
+        from intentlog.validation import validate_key_name, InvalidNameError
 
         with pytest.raises(InvalidNameError, match="null bytes"):
             validate_key_name("test\x00evil")
 
     def test_rejects_null_byte_in_branch_name(self):
-        from intentlog.validation import InvalidNameError, validate_branch_name
+        from intentlog.validation import validate_branch_name, InvalidNameError
 
         with pytest.raises(InvalidNameError, match="null bytes"):
             validate_branch_name("main\x00evil")

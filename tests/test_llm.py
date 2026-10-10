@@ -2,27 +2,27 @@
 Tests for LLM module
 """
 
-from datetime import datetime
-
 import pytest
 
-from intentlog.core import Intent
+pytestmark = pytest.mark.llm
+from datetime import datetime
+
 from intentlog.llm.provider import (
-    EmbeddingResponse,
+    LLMProvider,
     LLMConfig,
-    LLMError,
     LLMResponse,
+    EmbeddingResponse,
+    LLMError,
     MockProvider,
 )
 from intentlog.llm.registry import (
-    _providers,
+    register_provider,
     get_provider,
     list_providers,
-    register_provider,
+    _providers,
 )
-from intentlog.semantic import SemanticDiff, SemanticEngine
-
-pytestmark = pytest.mark.llm
+from intentlog.core import Intent
+from intentlog.semantic import SemanticEngine, SemanticDiff
 
 
 class TestLLMConfig:
@@ -349,7 +349,7 @@ class TestProjectConfigWithLLM:
 
     def test_config_with_llm(self):
         """Test config with LLM settings"""
-        from intentlog.storage import LLMSettings, ProjectConfig
+        from intentlog.storage import ProjectConfig, LLMSettings
 
         config = ProjectConfig(
             project_name="test",
@@ -361,7 +361,7 @@ class TestProjectConfigWithLLM:
 
     def test_config_to_dict_with_llm(self):
         """Test serializing config with LLM"""
-        from intentlog.storage import LLMSettings, ProjectConfig
+        from intentlog.storage import ProjectConfig, LLMSettings
 
         config = ProjectConfig(
             project_name="test",

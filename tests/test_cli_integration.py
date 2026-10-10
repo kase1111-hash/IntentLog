@@ -4,11 +4,11 @@ CLI Integration Tests for IntentLog
 These tests verify the CLI commands work correctly end-to-end.
 """
 
-import json
 import os
+import json
+import tempfile
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 
 import pytest

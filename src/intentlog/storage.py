@@ -312,7 +312,8 @@ class IntentLogStorage:
             The name of the locked branch (resolved from config when None).
 
         Raises:
-            ProjectNotFoundError: If project not initialized and branch is None
+            ProjectNotFoundError: If project not initialized
+            ValidationError: If an explicit branch name is invalid
             FileLockTimeout: If the lock cannot be acquired within lock_timeout
 
         Usage:
@@ -321,7 +322,16 @@ class IntentLogStorage:
                 intents.append(new_intent)
                 storage.save_intents(intents, branch)
         """
-        branch = branch or self.load_config().current_branch
+        # Resolve and validate BEFORE locking: acquiring the lock creates the
+        # sidecar file (and its parent directory), so an uninitialized project
+        # must raise first, or a stray .intentlog/ would shadow the real
+        # project root; likewise a traversal-style name must never reach
+        # _get_branch_file().
+        config = self.load_config()
+        if branch:
+            branch = validate_branch_name(branch)
+        else:
+            branch = config.current_branch
         with self._lock_file(self._get_branch_file(branch), exclusive=True):
             yield branch
 

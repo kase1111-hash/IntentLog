@@ -8,17 +8,22 @@ This module provides load and stress tests for IntentLog to verify:
 - Memory usage patterns
 - Chain integrity under stress
 """
+import pytest
+
 import os
-import random
-import statistics
+import sys
 import tempfile
 import threading
 import time
+import random
+import statistics
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Callable, List
+from typing import Callable, Dict, List, Optional, Tuple
 
 import pytest
+
 
 # Skip entire module if running in CI without load test flag
 LOAD_TEST_ENABLED = os.environ.get("INTENTLOG_LOAD_TEST", "0") == "1"
@@ -463,7 +468,7 @@ class TestChainIntegrity:
 
             storage.add_chained_intent(
                 name=f"Chained Intent {n}",
-                reasoning="Testing chain integrity under load",
+                reasoning=f"Testing chain integrity under load",
             )
 
         result = harness.run_concurrent_test(
@@ -488,8 +493,8 @@ class TestBackupUnderLoad:
 
     def test_backup_during_writes(self, temp_project, harness):
         """Test backup creation while writes are happening."""
-        from intentlog.backup import BackupManager
         from intentlog.storage import IntentLogStorage
+        from intentlog.backup import BackupManager
 
         write_counter = [0]
         backup_counter = [0]
@@ -539,14 +544,14 @@ class TestPerformanceBenchmarks:
         for i in range(num_operations):
             storage.add_intent(
                 name=f"Benchmark Intent {i}",
-                reasoning="Benchmarking single-threaded performance",
+                reasoning=f"Benchmarking single-threaded performance",
             )
         duration = time.perf_counter() - start
 
         ops_per_sec = num_operations / duration
         avg_latency_ms = (duration / num_operations) * 1000
 
-        print("\nSingle-Thread Benchmark:")
+        print(f"\nSingle-Thread Benchmark:")
         print(f"  Operations: {num_operations}")
         print(f"  Duration: {duration:.2f}s")
         print(f"  Throughput: {ops_per_sec:.2f} ops/sec")
@@ -575,7 +580,7 @@ class TestPerformanceBenchmarks:
 
         ops_per_sec = num_reads / duration
 
-        print("\nRead Benchmark:")
+        print(f"\nRead Benchmark:")
         print(f"  Operations: {num_reads}")
         print(f"  Duration: {duration:.2f}s")
         print(f"  Throughput: {ops_per_sec:.2f} ops/sec")

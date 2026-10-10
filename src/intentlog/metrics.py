@@ -9,10 +9,11 @@ Implements metrics from Doctrine-of-intent.md:
 These metrics help assess the quality and verifiability of intent logs.
 """
 
-import statistics
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
+from typing import List, Optional, Dict, Any, Tuple
 from enum import Enum
-from typing import Any, Dict, List
+import statistics
 
 from .core import Intent
 

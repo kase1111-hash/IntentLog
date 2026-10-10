@@ -6,7 +6,7 @@ Commands: keys, chain
 
 import sys
 
-from ..storage import BranchNotFoundError, IntentLogStorage, ProjectNotFoundError
+from ..storage import IntentLogStorage, ProjectNotFoundError, BranchNotFoundError
 from .utils import load_config_or_exit
 
 
@@ -15,9 +15,9 @@ def cmd_keys(args):
     action = args.action
 
     storage = IntentLogStorage()
-    load_config_or_exit(storage)
+    config = load_config_or_exit(storage)
 
-    from ..crypto import CryptoNotAvailableError, KeyManager, KeyNotFoundError
+    from ..crypto import KeyManager, CryptoNotAvailableError, KeyNotFoundError
 
     try:
         key_manager = KeyManager(storage.intentlog_dir)
@@ -41,10 +41,10 @@ def cmd_keys(args):
             key_pair = key_manager.generate_key(name=name, password=password)
             print(f"Generated key pair: {name}")
             print(f"  Key ID: {key_pair.key_id}")
-            print("  Algorithm: Ed25519")
+            print(f"  Algorithm: Ed25519")
             print(f"  Created: {key_pair.created_at}")
             if password:
-                print("  Encrypted: Yes")
+                print(f"  Encrypted: Yes")
             print(f"\nPublic key saved to: .intentlog/keys/{name}.pub")
             print(f"Private key saved to: .intentlog/keys/{name}.key")
         except Exception as e:
@@ -125,9 +125,9 @@ def cmd_chain(args):
         result = storage.verify_chain(branch)
 
         if result.valid:
-            print("Chain verification: PASSED")
+            print(f"Chain verification: PASSED")
         else:
-            print("Chain verification: FAILED")
+            print(f"Chain verification: FAILED")
 
         print(f"Entries checked: {result.entries_checked}")
         print(f"Root hash: {result.root_hash[:16]}...")

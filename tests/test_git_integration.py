@@ -10,20 +10,21 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 from pathlib import Path
 
 import pytest
 
 from intentlog.git import (
-    HOOK_MARKER,
     detect_git_repo,
-    get_git_branch,
     get_git_context,
+    get_git_branch,
     get_git_head,
     get_git_log_for_file,
-    hooks_status,
     install_hooks,
     uninstall_hooks,
+    hooks_status,
+    HOOK_MARKER,
 )
 from intentlog.storage import IntentLogStorage, ProjectConfig
 
@@ -276,7 +277,7 @@ class TestIntentGitContext:
     def test_commit_captures_git_context(self, ilog_in_git):
         storage, git_repo = ilog_in_git
 
-        storage.add_chained_intent(
+        chained = storage.add_chained_intent(
             name="Test intent",
             reasoning="Testing git context capture",
             metadata={"git_context": get_git_context(git_repo)},
@@ -615,7 +616,7 @@ class TestCLIGitIntegration:
 
     def test_tag_shows_in_log(self, ilog_in_git):
         storage, git_repo = ilog_in_git
-        storage.add_chained_intent(
+        chained = storage.add_chained_intent(
             name="Tagged in log", reasoning="Testing tag display in log",
             metadata={"tags": ["visible-tag"]},
         )

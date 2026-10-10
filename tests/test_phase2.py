@@ -9,42 +9,46 @@ Tests for:
 - Storage integration
 """
 
-import tempfile
-from pathlib import Path
-
 import pytest
+import tempfile
+import json
+from pathlib import Path
+from datetime import datetime, timedelta
 
 from intentlog.core import Intent
 from intentlog.merkle import (
-    GENESIS_HASH,
     ChainedIntent,
     MerkleChain,
-    append_to_chain,
     chain_intents,
-    compute_chain_hash,
-    compute_intent_content_hash,
+    append_to_chain,
+    verify_chain,
     compute_root_hash,
+    compute_intent_content_hash,
+    compute_chain_hash,
     find_divergence_point,
     generate_inclusion_proof,
-    verify_chain,
     verify_inclusion_proof,
+    ChainVerificationResult,
+    GENESIS_HASH,
 )
 
 # Only run crypto tests if cryptography is available
 try:
     from intentlog.crypto import (
-        CRYPTO_AVAILABLE,
         KeyManager,
-        KeyNotFoundError,
+        KeyPair,
         Signature,
-        SignatureError,
         generate_key_pair,
-        load_private_key,
-        load_public_key,
-        serialize_private_key,
-        serialize_public_key,
         sign_data,
         verify_signature,
+        serialize_private_key,
+        serialize_public_key,
+        load_private_key,
+        load_public_key,
+        CryptoError,
+        KeyNotFoundError,
+        SignatureError,
+        CRYPTO_AVAILABLE,
     )
     HAS_CRYPTO = CRYPTO_AVAILABLE
 except BaseException:
