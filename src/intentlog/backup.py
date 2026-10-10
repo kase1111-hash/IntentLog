@@ -12,6 +12,7 @@ Provides comprehensive backup and recovery capabilities:
 import hashlib
 import json
 import os
+import posixpath
 import shutil
 import tarfile
 from dataclasses import dataclass, field
@@ -26,6 +27,11 @@ from .storage import INTENTLOG_DIR, IntentLogStorage
 def _is_private_key(path: Path) -> bool:
     """True for private signing key files, which backups leave out by default."""
     return path.suffix == ".key" or (path.suffix == ".pem" and "private" in path.name.lower())
+
+
+def _normalized_member_name(name: str) -> str:
+    """Archive member name as it lands on disk ('./a//b/' -> 'a/b')."""
+    return posixpath.normpath(name)
 
 
 @dataclass
@@ -426,6 +432,14 @@ class BackupManager:
                 f"Refusing to extract member with path traversal: {member.name}"
             )
 
+        # tarfile on POSIX writes a backslash as part of the file name, so a
+        # name like '.intentlog\x' would land outside .intentlog/. Archives
+        # written by tarfile never contain one.
+        if "\\" in member.name:
+            raise RestoreError(
+                f"Refusing to extract member with a backslash in its name: {member.name}"
+            )
+
         # Reject symlinks and hardlinks (could point outside target)
         if member.issym() or member.islnk():
             raise RestoreError(
@@ -439,10 +453,7 @@ class BackupManager:
             )
 
         # Only the project's .intentlog/ directory is ever restored
-        normalized = member.name.replace("\\", "/")
-        while normalized.startswith("./"):
-            normalized = normalized[2:]
-        normalized = normalized.rstrip("/")
+        normalized = _normalized_member_name(member.name)
         if normalized != INTENTLOG_DIR and not normalized.startswith(INTENTLOG_DIR + "/"):
             raise RestoreError(
                 f"Refusing to extract member outside {INTENTLOG_DIR}/: {member.name}"
@@ -534,9 +545,7 @@ class BackupManager:
                         if member.name == "backup_metadata.json":
                             continue
                         self._validate_member(member, target_path)
-                        name = member.name.replace("\\", "/").rstrip("/")
-                        while name.startswith("./"):
-                            name = name[2:]
+                        name = _normalized_member_name(member.name)
                         if name in seen:
                             raise RestoreError(f"Duplicate archive member: {member.name}")
                         seen.add(name)
@@ -565,40 +574,24 @@ class BackupManager:
             if progress_callback:
                 progress_callback("Extracting backup...", 0.4)
 
-            # Extract archive
+            # Extract archive. Until the restore has fully succeeded, any
+            # failure removes what was written and puts the previous project
+            # back where it was.
             try:
                 target_path.mkdir(parents=True, exist_ok=True)
 
                 mode = "r:gz" if metadata.compression == "gzip" else "r"
-                try:
-                    with tarfile.open(backup_path, mode) as tar:
-                        for member in tar.getmembers():
-                            if member.name != "backup_metadata.json":
-                                self._safe_extract_member(tar, member, target_path)
-                except BaseException:
-                    # Put the previous project back rather than leave a
-                    # partial restore in its place
-                    if target_intentlog.exists():
-                        shutil.rmtree(target_intentlog, ignore_errors=True)
-                    if backup_existing is not None and backup_existing.exists():
-                        shutil.move(str(backup_existing), str(target_intentlog))
-                    raise
+                with tarfile.open(backup_path, mode) as tar:
+                    for member in tar.getmembers():
+                        if member.name != "backup_metadata.json":
+                            self._safe_extract_member(tar, member, target_path)
 
-                # Backups leave private keys out by default; keep the ones the
-                # replaced project had so signing keeps working
+                # Backups leave private keys out by default; keep the replaced
+                # project's keys where they match the restored public keys
                 if backup_existing is not None:
-                    kept = 0
-                    for item in backup_existing.rglob("*"):
-                        if item.is_file() and _is_private_key(item):
-                            dest = target_intentlog / item.relative_to(backup_existing)
-                            if not dest.exists():
-                                dest.parent.mkdir(parents=True, exist_ok=True)
-                                shutil.copy2(item, dest)
-                                kept += 1
-                    if kept:
-                        warnings.append(
-                            f"Kept {kept} private key file(s) from the replaced project"
-                        )
+                    warnings.extend(
+                        self._carry_over_private_keys(backup_existing, target_intentlog)
+                    )
 
                 keys_dir = target_intentlog / "keys"
                 if keys_dir.is_dir():
@@ -632,28 +625,85 @@ class BackupManager:
                     except Exception as e:
                         warnings.append(f"Failed to verify branch {branch}: {e}")
 
-                if progress_callback:
-                    progress_callback("Restore complete!", 1.0)
+            except BaseException as e:
+                if target_intentlog.is_symlink() or target_intentlog.is_file():
+                    target_intentlog.unlink()
+                elif target_intentlog.exists():
+                    shutil.rmtree(target_intentlog, ignore_errors=True)
+                if backup_existing is not None and backup_existing.exists():
+                    shutil.move(str(backup_existing), str(target_intentlog))
+                if isinstance(e, Exception):
+                    logger.error(f"Restore failed: {e}")
+                    raise RestoreError(f"Failed to restore backup: {e}") from e
+                raise
 
-                logger.info(
-                    "Backup restored successfully",
-                    backup_id=backup_id,
-                    target=str(target_path),
-                    intents_restored=intents_restored,
-                )
+            if progress_callback:
+                progress_callback("Restore complete!", 1.0)
 
-                return RestoreResult(
-                    success=len(errors) == 0,
-                    restored_path=target_path,
-                    branches_restored=branches_restored,
-                    intents_restored=intents_restored,
-                    warnings=warnings,
-                    errors=errors,
-                )
+            logger.info(
+                "Backup restored successfully",
+                backup_id=backup_id,
+                target=str(target_path),
+                intents_restored=intents_restored,
+            )
 
-            except Exception as e:
-                logger.error(f"Restore failed: {e}")
-                raise RestoreError(f"Failed to restore backup: {e}")
+            return RestoreResult(
+                success=len(errors) == 0,
+                restored_path=target_path,
+                branches_restored=branches_restored,
+                intents_restored=intents_restored,
+                warnings=warnings,
+                errors=errors,
+            )
+
+    @staticmethod
+    def _carry_over_private_keys(old_dir: Path, new_dir: Path) -> List[str]:
+        """
+        Copy the replaced project's private signing keys into the restored one.
+
+        Only keys/<name>.key is carried over, and only when the restored
+        project has a keys/<name>.pub identical to the replaced project's, so
+        a private key never ends up paired with a different public key (for
+        example one rotated after the backup was taken). Anything else stays
+        in the moved-aside copy and is reported.
+
+        Returns:
+            Warnings describing what was kept and what was left behind
+        """
+        old_keys = old_dir / "keys"
+        kept: List[str] = []
+        left: List[str] = []
+        for item in sorted(old_dir.rglob("*")):
+            if not (item.is_file() and _is_private_key(item)):
+                continue
+            relative = item.relative_to(old_dir)
+            dest = new_dir / relative
+            if dest.exists():
+                continue
+            old_pub = item.with_suffix(".pub")
+            new_pub = dest.with_suffix(".pub")
+            if (
+                item.parent == old_keys
+                and item.suffix == ".key"
+                and old_pub.is_file()
+                and new_pub.is_file()
+                and old_pub.read_bytes() == new_pub.read_bytes()
+            ):
+                dest.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(item, dest)
+                kept.append(relative.as_posix())
+            else:
+                left.append(relative.as_posix())
+
+        warnings = []
+        if kept:
+            warnings.append(f"Kept {len(kept)} private key file(s) from the replaced project")
+        if left:
+            warnings.append(
+                f"Did not carry over {len(left)} private key file(s) that do not match "
+                f"the restored public keys ({', '.join(left)}); they remain in {old_dir}"
+            )
+        return warnings
 
     def delete_backup(self, backup_id: str, confirm: bool = False) -> bool:
         """

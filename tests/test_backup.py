@@ -541,3 +541,62 @@ class TestRestoreKeepsKeysAndRollsBack:
         with pytest.raises(RestoreError, match="must be a directory"):
             manager.restore_backup("x", target_path=tmp_path / "out", verify_first=False)
 
+    def test_rotated_key_is_not_paired_with_old_public_key(self, manager, project):
+        key = self._add_key(project)
+        _, metadata = manager.create_backup()
+        # Rotate the key after the backup was taken
+        key.write_text("NEW PRIVATE KEY")
+        (key.parent / "default.pub").write_text("NEW PUBLIC KEY")
+
+        result = manager.restore_backup(metadata.backup_id, target_path=project, overwrite=True)
+
+        assert result.success is True
+        assert not key.exists()
+        assert (key.parent / "default.pub").read_text() == "PUBLIC KEY"
+        assert any("Did not carry over 1 private key" in w for w in result.warnings)
+        assert any("no private key for: default" in w for w in result.warnings)
+        moved = project / f"{INTENTLOG_DIR}.bak" / "keys" / "default.key"
+        assert moved.read_text() == "NEW PRIVATE KEY"
+
+    def test_failure_after_extraction_also_rolls_back(self, manager, project, monkeypatch):
+        key = self._add_key(project)
+        _, metadata = manager.create_backup()
+        IntentLogStorage(project).add_intent("later", "only in the live project")
+        before = _intent_tuples(project)
+
+        import intentlog.backup as backup_module
+
+        def no_space(*args, **kwargs):
+            raise OSError(28, "No space left on device")
+
+        monkeypatch.setattr(backup_module.shutil, "copy2", no_space)
+
+        with pytest.raises(RestoreError, match="No space left"):
+            manager.restore_backup(metadata.backup_id, target_path=project, overwrite=True)
+
+        assert _intent_tuples(project) == before
+        assert key.read_text() == "PRIVATE KEY"
+        assert not (project / f"{INTENTLOG_DIR}.bak").exists()
+
+    @pytest.mark.parametrize(
+        "alias", [f"{INTENTLOG_DIR}/./{INTENTS_FILE}", f"{INTENTLOG_DIR}//{INTENTS_FILE}"]
+    )
+    def test_aliased_duplicate_members_are_rejected(self, manager, project, alias):
+        backup_path, metadata = manager.create_backup()
+        _rewrite_archive(backup_path, alias, data=b"{}")
+
+        with pytest.raises(RestoreError, match="Duplicate"):
+            manager.restore_backup(
+                metadata.backup_id, target_path=project, overwrite=True, verify_first=False
+            )
+
+    def test_backslash_member_names_are_rejected(self, manager, tmp_path):
+        backup_path, metadata = manager.create_backup()
+        _rewrite_archive(backup_path, f"{INTENTLOG_DIR}\\evil.sh")
+        target = tmp_path / "restored"
+
+        with pytest.raises(RestoreError, match="backslash"):
+            manager.restore_backup(metadata.backup_id, target_path=target, verify_first=False)
+
+        assert not target.exists() or not any(target.iterdir())
+
