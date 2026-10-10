@@ -2,29 +2,28 @@
 Tests for IntentLog storage module
 """
 
-import os
 import json
-import tempfile
+import os
 import shutil
+import tempfile
 import threading
-from pathlib import Path
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 
+from intentlog.core import Intent
+from intentlog.filelock import LOCK_BACKEND, FileLock, FileLockError, FileLockTimeout
 from intentlog.storage import (
+    BranchExistsError,
+    BranchNotFoundError,
     IntentLogStorage,
     ProjectConfig,
-    ProjectNotFoundError,
     ProjectExistsError,
-    BranchNotFoundError,
-    BranchExistsError,
+    ProjectNotFoundError,
     compute_intent_hash,
     find_project_root,
-    INTENTLOG_DIR,
 )
-from intentlog.core import Intent
-from intentlog.filelock import FileLock, FileLockError, FileLockTimeout, LOCK_BACKEND
 
 
 @pytest.fixture

@@ -16,24 +16,24 @@ Features:
 - Timeout support
 """
 
-import contextvars
-import threading
-import uuid
-import json
 import base64
 import binascii
-import os
+import contextvars
+import json
 import logging
+import os
 import re
-from datetime import datetime, timedelta
-from typing import Optional, Dict, Any, List, Callable, Set, TYPE_CHECKING
+import threading
+import uuid
 from dataclasses import dataclass, field
+from datetime import datetime, timedelta
 from enum import Enum
+from typing import TYPE_CHECKING, Any, Callable, Dict, List, Optional, Set
 
 logger = logging.getLogger(__name__)
 
 if TYPE_CHECKING:
-    from .merkle import ChainedIntent
+    pass
 
 
 # Context variable for async-safe intent tracking

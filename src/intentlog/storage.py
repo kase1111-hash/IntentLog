@@ -11,19 +11,19 @@ Supports:
 - Branch management with chain verification
 """
 
+import hashlib
 import json
 import os
-import hashlib
 import tempfile
 from contextlib import contextmanager
-from pathlib import Path
-from datetime import datetime
-from typing import Optional, Dict, Any, List, Tuple, Iterator, TYPE_CHECKING
 from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional
 
-from .core import Intent, IntentLog
+from .core import Intent
 from .logging import get_logger, log_context
-from .validation import validate_project_name, validate_branch_name, ValidationError
+from .validation import validate_branch_name, validate_project_name
 
 logger = get_logger(__name__)
 
@@ -72,8 +72,8 @@ def _parse_datetime(value: str, field_name: str = "timestamp") -> datetime:
 
 # Lazy imports to avoid circular dependencies
 if TYPE_CHECKING:
+    from .crypto import KeyManager
     from .merkle import ChainedIntent, ChainVerificationResult
-    from .crypto import KeyManager, Signature
 
 
 INTENTLOG_DIR = ".intentlog"
@@ -405,10 +405,10 @@ class IntentLogStorage:
         """
         if not self.is_initialized():
             raise ProjectNotFoundError(
-                f"No IntentLog project found. Run 'ilog init' first."
+                "No IntentLog project found. Run 'ilog init' first."
             )
 
-        with open(self.config_path, 'r') as f:
+        with open(self.config_path) as f:
             data = json.load(f)
 
         return ProjectConfig.from_dict(data)
@@ -441,7 +441,7 @@ class IntentLogStorage:
             raise BranchNotFoundError(f"Branch '{branch}' not found")
 
         with self._lock_file(branch_file, exclusive=False):
-            with open(branch_file, 'r') as f:
+            with open(branch_file) as f:
                 data = json.load(f)
 
         intents = []
@@ -725,7 +725,7 @@ class IntentLogStorage:
             raise BranchNotFoundError(f"Branch '{branch}' not found")
 
         with self._lock_file(branch_file, exclusive=False):
-            with open(branch_file, 'r') as f:
+            with open(branch_file) as f:
                 data = json.load(f)
 
         chained = []
@@ -894,7 +894,7 @@ class IntentLogStorage:
         Returns:
             Root hash string
         """
-        from .merkle import compute_root_hash, GENESIS_HASH
+        from .merkle import GENESIS_HASH, compute_root_hash
 
         chained = self.load_chained_intents(branch)
         if not chained:

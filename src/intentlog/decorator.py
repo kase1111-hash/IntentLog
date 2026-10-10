@@ -16,31 +16,24 @@ Features:
 
 import functools
 import inspect
-import time
-import uuid
 from datetime import datetime
+from enum import Enum
 from typing import (
-    Optional,
-    Dict,
     Any,
     Callable,
+    Dict,
+    List,
+    Optional,
     TypeVar,
     Union,
-    List,
     overload,
 )
-from enum import Enum
 
 from .context import (
     IntentContext,
     IntentContextManager,
-    get_current_intent,
-    get_current_session,
-    get_intent_chain,
 )
-from .core import Intent
 from .storage import IntentLogStorage
-
 
 F = TypeVar("F", bound=Callable[..., Any])
 
