@@ -5,10 +5,9 @@ Provides helper functions for detecting git repositories, capturing
 git context (branch, HEAD, staged files), and managing git hooks.
 """
 
-import os
 import subprocess
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Any, Dict, List, Optional
 
 
 def _run_git(*args: str, cwd: Optional[Path] = None) -> Optional[str]:
@@ -170,9 +169,21 @@ case "$COMMIT_SOURCE" in
 esac
 
 # Comment lines are kept when git is told not to strip them; stay out.
+# 'scissors' only truncates at the cut line, which is absent when
+# commit.status is false, so it is treated as non-stripping too.
 case "$(git config --get commit.cleanup 2>/dev/null)" in
-    whitespace|verbatim) exit 0 ;;
+    whitespace|verbatim|scissors) exit 0 ;;
 esac
+
+# Git only strips lines that start with its comment character, so stay out
+# unless that is the default '#'. core.commentString is the git >= 2.45
+# spelling of the same setting.
+for key in core.commentChar core.commentString; do
+    case "$(git config --get "$key" 2>/dev/null)" in
+        ""|"#") ;;
+        *) exit 0 ;;
+    esac
+done
 
 # Bail out quietly when IntentLog is not installed.
 command -v intentlog >/dev/null 2>&1 || exit 0

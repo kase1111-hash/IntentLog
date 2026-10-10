@@ -10,21 +10,20 @@ import os
 import shutil
 import subprocess
 import sys
-import tempfile
 from pathlib import Path
 
 import pytest
 
 from intentlog.git import (
+    HOOK_MARKER,
     detect_git_repo,
-    get_git_context,
     get_git_branch,
+    get_git_context,
     get_git_head,
     get_git_log_for_file,
+    hooks_status,
     install_hooks,
     uninstall_hooks,
-    hooks_status,
-    HOOK_MARKER,
 )
 from intentlog.storage import IntentLogStorage, ProjectConfig
 
@@ -277,7 +276,7 @@ class TestIntentGitContext:
     def test_commit_captures_git_context(self, ilog_in_git):
         storage, git_repo = ilog_in_git
 
-        chained = storage.add_chained_intent(
+        storage.add_chained_intent(
             name="Test intent",
             reasoning="Testing git context capture",
             metadata={"git_context": get_git_context(git_repo)},
@@ -616,7 +615,7 @@ class TestCLIGitIntegration:
 
     def test_tag_shows_in_log(self, ilog_in_git):
         storage, git_repo = ilog_in_git
-        chained = storage.add_chained_intent(
+        storage.add_chained_intent(
             name="Tagged in log", reasoning="Testing tag display in log",
             metadata={"tags": ["visible-tag"]},
         )
@@ -837,3 +836,91 @@ class TestPrepareCommitMsgHook:
         content = hook_path.read_text()
         assert content.count(HOOK_MARKER) == 1
         assert "--json" not in content
+
+    @pytest.mark.skipif(not _SH_AVAILABLE, reason="sh not available")
+    @pytest.mark.parametrize(
+        "key,value",
+        [
+            ("core.commentChar", ";"),
+            ("core.commentChar", "auto"),
+            ("core.commentString", "//"),
+        ],
+    )
+    def test_custom_comment_char_leaves_file_untouched(self, ilog_in_git, key, value):
+        """Git only strips lines starting with its comment char; '#' would be kept."""
+        storage, git_repo = ilog_in_git
+        storage.add_chained_intent(name="Hook intent", reasoning="Should not appear")
+        install_hooks(git_repo)
+        hook_path = git_repo / ".git" / "hooks" / "prepare-commit-msg"
+        _git(git_repo, "config", key, value)
+
+        original = b"subject\n\nbody\n"
+        msg_file = git_repo / "COMMIT_MSG_TEST"
+        msg_file.write_bytes(original)
+
+        result = subprocess.run(
+            ["sh", str(hook_path), str(msg_file), ""],
+            cwd=git_repo,
+            capture_output=True,
+            text=True,
+            env=_hook_env(),
+        )
+        assert result.returncode == 0, result.stderr
+        assert msg_file.read_bytes() == original
+
+    @pytest.mark.skipif(not _SH_AVAILABLE, reason="sh not available")
+    @pytest.mark.parametrize("cleanup", ["scissors", "whitespace", "verbatim"])
+    def test_non_stripping_cleanup_leaves_file_untouched(self, ilog_in_git, cleanup):
+        """commit.cleanup modes that keep comment lines must disable the hook."""
+        storage, git_repo = ilog_in_git
+        storage.add_chained_intent(name="Hook intent", reasoning="Should not appear")
+        install_hooks(git_repo)
+        hook_path = git_repo / ".git" / "hooks" / "prepare-commit-msg"
+        _git(git_repo, "config", "commit.cleanup", cleanup)
+
+        original = b"subject\n\nbody\n"
+        msg_file = git_repo / "COMMIT_MSG_TEST"
+        msg_file.write_bytes(original)
+
+        result = subprocess.run(
+            ["sh", str(hook_path), str(msg_file), ""],
+            cwd=git_repo,
+            capture_output=True,
+            text=True,
+            env=_hook_env(),
+        )
+        assert result.returncode == 0, result.stderr
+        assert msg_file.read_bytes() == original
+
+    @pytest.mark.skipif(not _SH_AVAILABLE, reason="sh not available")
+    def test_editor_commit_with_scissors_config_stores_only_user_text(self, ilog_in_git):
+        """With commit.cleanup=scissors and commit.status=false git keeps '#' lines."""
+        storage, git_repo = ilog_in_git
+        storage.add_chained_intent(name="Hook intent", reasoning="Should not appear")
+        install_hooks(git_repo)
+        _git(git_repo, "config", "commit.cleanup", "scissors")
+        _git(git_repo, "config", "commit.status", "false")
+
+        editor = git_repo / "fake-editor.sh"
+        editor.write_text(
+            "#!/bin/sh\n"
+            "printf 'editor subject\\n\\n' | cat - \"$1\" > \"$1.tmp\" && mv \"$1.tmp\" \"$1\"\n"
+        )
+        editor.chmod(0o755)
+
+        (git_repo / "f").write_text("")
+        _git(git_repo, "add", "f")
+        env = _hook_env()
+        env["GIT_EDITOR"] = str(editor)
+        result = subprocess.run(
+            ["git", "-c", "commit.gpgsign=false", "commit", "-q"],
+            cwd=git_repo,
+            capture_output=True,
+            text=True,
+            env=env,
+        )
+        assert result.returncode == 0, f"git commit failed: {result.stderr}"
+
+        stored = _git(git_repo, "log", "-1", "--format=%B").stdout
+        assert stored.strip() == "editor subject"
+        assert "IntentLog" not in stored
