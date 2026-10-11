@@ -22,10 +22,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ilog tag` no longer rewrites an intent when no tag changed.
 - `ilog chain verify` reports entries whose chain data was removed or cannot be read, including the first entry, instead of crashing or re-hashing the branch as if it had never been chained. `ilog commit` and `IntentLogStorage.add_intent()` refuse to append to such a branch, and `ilog chain migrate --force` rebuilds the chain from the first damaged entry, even when no entry is readable.
 - Branch names are validated on every storage path, so no branch name or `config.json` value can address a file outside `.intentlog/`.
-- Entries that cannot be read are never dropped silently. `ilog commit`, `ilog chain migrate`, `tag`, `link`, `merge` and `add_intent()` refuse to rewrite a branch that would lose them, on chained and legacy branches alike; `ilog chain migrate --force --branch <name>` drops them explicitly. `ilog branch` copies the source verbatim, and the `@intent_logger` decorator logs a warning when it cannot save an intent instead of failing silently.
+- Entries that cannot be read are never dropped silently. `ilog commit`, `ilog chain migrate`, `tag`, `link`, `merge` and `add_intent()` refuse to rewrite a branch that would lose them, on chained and legacy branches alike; `ilog chain migrate --force --branch <name>` drops them explicitly. `ilog branch` copies the source verbatim, and the `@intent_logger` decorator logs a warning when it cannot save an intent instead of failing silently, without ever failing the decorated function.
 - `ilog merge` checks the source branch as well as the target, so a tampered or unreadable source is not re-chained into a clean-looking target without `--force`.
 - A chained branch whose `chain_version` or `chain_hash` markers were removed is still treated as a damaged chain, so its signatures are never stripped by re-chaining it as legacy data.
-- Date-and-time values with a `Z` UTC suffix are read on Python 3.8-3.10 as they are on 3.11+, in chained and legacy entries alike, so a chain that verifies on one supported Python verifies on all of them.
+- Extended-format ISO 8601 timestamps that Python 3.8-3.10 reject (a `Z` suffix, a `,` decimal, or a fraction that is not 3 or 6 digits long) are read on those versions exactly as 3.11+ reads them, in chained and legacy entries alike. Basic-format values (no `-` or `:` separators) still need Python 3.11+.
+- `ilog chain verify` fails on a legacy branch with an entry it cannot read, instead of verifying the readable entries only, so it agrees with the commands that refuse to rewrite that branch. Every refusal names the branch in its repair hint.
 - `mkdocs build --strict` passes again, and the API reference only lists members that exist. The `docs` extra allows mkdocstrings 1.x, which works with current pymdown-extensions.
 - `examples/basic_usage.py`, `benchmarks/run_benchmarks.py` and the pytest-benchmark suite run against the v0.2.0 API.
 - `MANIFEST.in` no longer lists files that were deleted, and `setup.py` defers all metadata to `pyproject.toml`.
@@ -33,7 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 - `--force` for `ilog tag` and `ilog link`. Without it they refuse a change that would remove signatures, or that would rewrite chain entries which already fail verification.
 - `--force` for `ilog merge` and `ilog chain migrate`, which otherwise refuse to rewrite a damaged stored chain. `migrate_to_chain()` and `add_intent()` take `force=`.
-- `IntentLogStorage.save_intents()` takes `strict=` and returns the number of signatures removed. New exceptions: `SignatureLossError` and `ChainIntegrityError`.
+- `IntentLogStorage.save_intents()` takes `strict=` (default `True`, so dropping or re-chaining damaged entries needs `strict=False`) and returns the number of signatures removed. New `check_branch_integrity()`. New exceptions: `SignatureLossError` and `ChainIntegrityError`.
 
 ### Changed
 - The ruff lint job is clean across `src/` and `tests/`.

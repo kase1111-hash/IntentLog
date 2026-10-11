@@ -188,8 +188,13 @@ def _log_intent(
                 )
                 return context.intent_id
         except Exception as e:
-            # Never break the decorated function, but say why nothing was saved
-            get_logger().warning(f"Intent '{intent_name}' was not persisted: {e}")
+            # Never break the decorated function, but say why nothing was
+            # saved. Reporting must not fail either (logging configuration
+            # comes from the environment and can itself raise).
+            try:
+                get_logger().warning(f"Intent '{intent_name}' was not persisted: {e}")
+            except Exception:
+                pass
             return None
 
     return context.intent_id if status == "completed" else None
