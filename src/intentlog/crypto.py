@@ -348,10 +348,13 @@ class KeyManager:
         # Add to .gitignore if not already there
         gitignore = self.intentlog_dir / ".gitignore"
         if gitignore.exists():
+            from .storage import _gitignore_patterns
+
             # Read as bytes: the file may be in any encoding (older versions
-            # wrote it in the locale's), and only an ASCII entry is looked for
+            # wrote it in the locale's). Only a line git reads as exactly
+            # this pattern counts.
             content = gitignore.read_bytes()
-            if b"keys/*.key" not in content:
+            if b"keys/*.key" not in _gitignore_patterns(content):
                 with open(gitignore, "a", encoding="utf-8") as f:
                     f.write("\n# Private keys - never commit!\nkeys/*.key\n")
 

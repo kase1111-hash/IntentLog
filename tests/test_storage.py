@@ -1702,6 +1702,55 @@ class TestRoundFifteenFixes:
         assert gitignore.read_bytes() == content
 
 
+class TestRoundSixteenFixes:
+    """.gitignore lines are read the way git reads them."""
+
+    @pytest.mark.parametrize(
+        "content, present",
+        [
+            # Results of 'git check-ignore' for a file named a.key
+            (b"*.key\n", True),
+            (b"*.key  \r\n", True),
+            (b"*.key\r", True),
+            (b"\xef\xbb\xbf*.key\n", True),
+            (b"*.key\r\r\n", False),
+            (b"*.key\rjunk\n", False),
+            (b"# header\r*.key\r", False),
+            (b"*.key\\ \n", False),
+            (b"*.key\t\n", False),
+            (b" *.key\n", False),
+        ],
+    )
+    def test_patterns_match_git(self, content, present):
+        from intentlog.storage import _gitignore_patterns
+
+        assert (b"*.key" in _gitignore_patterns(content)) is present
+
+    def test_cr_only_line_endings_get_the_defaults_added(self, initialized_project):
+        storage = initialized_project
+        gitignore = storage.intentlog_dir / ".gitignore"
+        gitignore.write_bytes(gitignore.read_bytes().replace(b"\n", b"\r"))
+
+        storage.init_project("again", force=True)
+
+        from intentlog.storage import _gitignore_patterns
+
+        assert {b"*.key", b"temp/"} <= _gitignore_patterns(gitignore.read_bytes())
+
+    @pytest.mark.skipif(not CRYPTO_AVAILABLE, reason="cryptography not installed")
+    def test_key_generation_needs_a_real_keys_entry(self, initialized_project):
+        storage = initialized_project
+        gitignore = storage.intentlog_dir / ".gitignore"
+        gitignore.write_bytes(b"#keys/*.key\n  keys/*.key\n")
+
+        with pytest.warns(UserWarning):
+            storage.get_key_manager().generate_key()
+
+        from intentlog.storage import _gitignore_patterns
+
+        assert b"keys/*.key" in _gitignore_patterns(gitignore.read_bytes())
+
+
 class TestBranchNamesOnEveryPath:
     @pytest.mark.parametrize("name", ["../escape", "../../x", "a/b", "bad name"])
     def test_invalid_names_are_not_found_and_create_nothing(self, tmp_path, name):

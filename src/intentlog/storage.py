@@ -330,6 +330,42 @@ _GITIGNORE_ENTRIES = (
 _CONFIG_STRING_FIELDS = ("created_at", "current_branch", "version", "git_root")
 
 
+def _git_trim_trailing_spaces(line: bytes) -> bytes:
+    """Remove trailing spaces not escaped with a backslash, as git does."""
+    last_space = None
+    i = 0
+    while i < len(line):
+        char = line[i:i + 1]
+        if char == b" ":
+            if last_space is None:
+                last_space = i
+        else:
+            if char == b"\\":
+                i += 1  # the next byte is escaped
+                if i >= len(line):
+                    return line
+            last_space = None
+        i += 1
+    return line if last_space is None else line[:last_space]
+
+
+def _gitignore_patterns(content: bytes) -> set:
+    """
+    The patterns git reads from .gitignore content: a leading UTF-8 BOM
+    skipped, lines split at LF only, one CR before each LF dropped, and
+    trailing spaces trimmed unless escaped. Any other whitespace (leading,
+    tabs, a second CR) stays part of the pattern.
+    """
+    if content.startswith(b"\xef\xbb\xbf"):
+        content = content[3:]
+    patterns = set()
+    for line in content.split(b"\n"):
+        if line.endswith(b"\r"):
+            line = line[:-1]
+        patterns.add(_git_trim_trailing_spaces(line))
+    return patterns
+
+
 def _config_problem(data: Any) -> Optional[str]:
     """
     Describe why parsed config.json data is not a usable configuration, or
@@ -590,9 +626,7 @@ class IntentLogStorage:
         # default entries it lacks.
         gitignore_path = self.intentlog_dir / ".gitignore"
         current = gitignore_path.read_bytes() if gitignore_path.is_file() else b""
-        # Git ignores a trailing CR and trailing spaces, but leading
-        # whitespace is part of the pattern
-        present = {line.rstrip(b"\r").rstrip(b" ") for line in current.splitlines()}
+        present = _gitignore_patterns(current)
         missing = [entry for entry in _GITIGNORE_ENTRIES if entry.encode() not in present]
         if not current:
             lines = ["# IntentLog sensitive data - never commit!"] + missing
