@@ -557,7 +557,7 @@ class IntentLogStorage:
         intents: List[Intent],
         branch: Optional[str] = None,
         *,
-        strict: bool = False,
+        strict: bool = True,
     ) -> int:
         """
         Save intents to a branch.
@@ -574,9 +574,10 @@ class IntentLogStorage:
         Args:
             intents: List of Intent objects to save
             branch: Branch name. If None, uses current branch.
-            strict: If True, refuse a rewrite that would remove signatures or
-                overwrite stored entries that fail chain verification. If
-                False, proceed and log a warning.
+            strict: If True (the default), refuse a rewrite that would remove
+                signatures, overwrite stored entries that fail chain
+                verification, or drop entries that cannot be read. If False,
+                proceed and log a warning.
 
         Returns:
             Number of signatures removed because their intents were re-chained.
@@ -608,7 +609,8 @@ class IntentLogStorage:
             if unreadable:
                 message = (
                     f"Branch '{branch}' has an unreadable entry at position {unreadable[0]}; "
-                    "saving would drop it"
+                    "saving would drop it. Fix the entry, or run "
+                    f"'ilog chain migrate --force --branch {branch}' to drop it"
                 )
                 if strict:
                     raise ChainIntegrityError(message)
@@ -720,7 +722,8 @@ class IntentLogStorage:
                     broken_at = i
                     message = (
                         f"Branch '{branch}' fails chain verification at position {i}; "
-                        "rewriting it would hide the break. Run 'ilog chain verify' for details"
+                        "rewriting it would hide the break. Run "
+                        f"'ilog chain verify --branch {branch}' for details"
                     )
                     break
                 if not _readable_as_intent(raw):
@@ -729,7 +732,8 @@ class IntentLogStorage:
                     broken_at = i
                     message = (
                         f"Branch '{branch}' has an unreadable entry at position {i}; "
-                        "rewriting the branch would drop it"
+                        "rewriting the branch would drop it. Fix the entry, or run "
+                        f"'ilog chain migrate --force --branch {branch}' to drop it"
                     )
                     break
                 continue
@@ -737,7 +741,8 @@ class IntentLogStorage:
                 broken_at = i
                 message = (
                     f"Branch '{branch}' fails chain verification at position {i}; "
-                    "rewriting it would hide the break. Run 'ilog chain verify' for details"
+                    "rewriting it would hide the break. Run "
+                    f"'ilog chain verify --branch {branch}' for details"
                 )
                 break
 
@@ -1201,8 +1206,21 @@ class IntentLogStorage:
         """
         from .merkle import verify_chain
 
+        branch = branch or self.load_config().current_branch
         chained = self.load_chained_intents(branch)
-        return verify_chain(chained)
+        result = verify_chain(chained)
+
+        # A legacy branch is chained from its readable entries only; an entry
+        # that cannot be read cannot be verified either
+        data = self._read_branch_data(self._get_branch_file(branch))
+        if not _is_chained_data(data):
+            for i, entry in enumerate(data.get("intents", [])):
+                if not _readable_as_intent(entry):
+                    result.valid = False
+                    result.errors.append(f"Unreadable entry at position {i} cannot be verified")
+                    if result.broken_at is None:
+                        result.broken_at = i
+        return result
 
     def check_branch_integrity(self, branch: Optional[str] = None) -> Optional[str]:
         """
@@ -1221,13 +1239,19 @@ class IntentLogStorage:
         data = self._read_branch_data(self._get_branch_file(branch))
         if not data and branch != "main":
             raise BranchNotFoundError(f"Branch '{branch}' not found")
+        for i, entry in enumerate(data.get("intents", [])):
+            if not _readable_as_intent(entry):
+                return (
+                    f"Branch '{branch}' has an unreadable entry at position {i}. Fix the "
+                    f"entry, or run 'ilog chain migrate --force --branch {branch}' to drop it"
+                )
         if _is_chained_data(data):
             result = self.verify_chain(branch)
             if not result.valid:
-                return f"Branch '{branch}' fails chain verification at sequence {result.broken_at}"
-        for i, entry in enumerate(data.get("intents", [])):
-            if not _readable_as_intent(entry):
-                return f"Branch '{branch}' has an unreadable entry at position {i}"
+                return (
+                    f"Branch '{branch}' fails chain verification at sequence "
+                    f"{result.broken_at}. Run 'ilog chain verify --branch {branch}' for details"
+                )
         return None
 
     def get_root_hash(self, branch: Optional[str] = None) -> str:

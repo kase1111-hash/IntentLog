@@ -5,6 +5,7 @@ Tests for IntentLog storage module
 import json
 import os
 import shutil
+import sys
 import tempfile
 import threading
 from datetime import datetime
@@ -1209,15 +1210,86 @@ class TestRoundEightPolicyGaps:
         storage.create_branch("copy")
 
         assert _branch_data(storage, "copy")["intents"] == [readable, broken]
-        assert storage.check_branch_integrity("copy") == (
-            "Branch 'copy' has an unreadable entry at position 1"
-        )
+        problem = storage.check_branch_integrity("copy")
+        assert problem.startswith("Branch 'copy' has an unreadable entry at position 1")
+        assert "migrate --force --branch copy" in problem
 
     def test_check_branch_integrity_on_sound_branch(self, initialized_project):
         storage = initialized_project
         storage.add_chained_intent("a", "fine")
 
         assert storage.check_branch_integrity() is None
+
+
+class TestRoundNineConsistency:
+    """Timestamps, verification and hints agree with each other everywhere."""
+
+    # Results Python 3.11+ gives natively; every supported Python must match
+    EXTENDED_CASES = [
+        ("2024-01-01T10:00:00.1Z", "2024-01-01T10:00:00.100000+00:00"),
+        ("2024-01-01T10:00:00.12Z", "2024-01-01T10:00:00.120000+00:00"),
+        ("2024-01-01T10:00:00.1234Z", "2024-01-01T10:00:00.123400+00:00"),
+        ("2024-01-01T10:00:00.1234567Z", "2024-01-01T10:00:00.123456+00:00"),
+        ("2024-01-01T10:00:00.123456789+02:00", "2024-01-01T10:00:00.123456+02:00"),
+        ("2024-01-01T10:00:00,123Z", "2024-01-01T10:00:00.123000+00:00"),
+        ("2024-01-01T10:00:00,5+01:00", "2024-01-01T10:00:00.500000+01:00"),
+        ("2024-01-01T10:00:00.12+02:00", "2024-01-01T10:00:00.120000+02:00"),
+    ]
+
+    @pytest.mark.parametrize("value, expected", EXTENDED_CASES)
+    def test_extended_timestamps_read_like_python_311(self, value, expected):
+        from intentlog.timestamps import parse_iso_datetime
+
+        assert parse_iso_datetime(value).isoformat() == expected
+
+    @pytest.mark.skipif(sys.version_info < (3, 11), reason="compares with the native 3.11+ parser")
+    @pytest.mark.parametrize("value, expected", EXTENDED_CASES)
+    def test_rewrite_matches_native_parser(self, value, expected):
+        from intentlog.timestamps import _as_python38_isoformat
+
+        assert datetime.fromisoformat(_as_python38_isoformat(value)) == datetime.fromisoformat(value)
+
+    def test_chained_entry_with_two_digit_fraction_verifies(self, initialized_project):
+        from datetime import timezone
+
+        from intentlog.merkle import chain_intents
+
+        storage = initialized_project
+        stamp = datetime(2024, 1, 1, 10, 0, 0, 120000, tzinfo=timezone.utc)
+        storage.save_chained_intents(chain_intents([
+            Intent(intent_name="a", intent_reasoning="go-style stamp", timestamp=stamp),
+        ]))
+        path = storage._get_branch_file("main")
+        data = json.loads(path.read_text())
+        data["intents"][0]["timestamp"] = "2024-01-01T10:00:00.12Z"
+        path.write_text(json.dumps(data, indent=2))
+
+        assert storage.verify_chain().valid
+
+    def test_verify_reports_unreadable_legacy_entry(self, initialized_project):
+        storage = initialized_project
+        readable = {"intent_id": "id-a", "intent_name": "a", "intent_reasoning": "ok",
+                    "timestamp": "2024-01-01T10:00:00", "metadata": {}}
+        broken = {"intent_id": "id-b", "intent_name": "b", "intent_reasoning": "no timestamp"}
+        storage._get_branch_file("main").write_text(
+            json.dumps({"branch": "main", "intents": [readable, broken]})
+        )
+
+        result = storage.verify_chain()
+
+        assert not result.valid
+        assert result.broken_at == 1
+
+    def test_save_intents_is_strict_by_default(self, initialized_project):
+        storage = initialized_project
+        for name in "ab":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        _strip(storage, 1)
+        intents = storage.load_intents()
+        intents[0].metadata["tags"] = ["x"]
+
+        with pytest.raises(ChainIntegrityError, match="--branch main"):
+            storage.save_intents(intents)
 
 
 class TestBranchNamesOnEveryPath:
@@ -1271,7 +1343,10 @@ class TestSignedChainPreservation:
         intents = storage.load_intents()
         intents[2].metadata["tags"] = ["x"]
 
-        assert storage.save_intents(intents) == 1
+        # Removing signatures needs an explicit opt-in
+        with pytest.raises(SignatureLossError):
+            storage.save_intents(intents)
+        assert storage.save_intents(intents, strict=False) == 1
 
         assert self._signed(storage) == [True, True, False]
         chained = storage.load_chained_intents()

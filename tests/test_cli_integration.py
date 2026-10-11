@@ -746,6 +746,40 @@ class TestMergeChecksSource:
         assert "Traceback" not in result.stdout + result.stderr
 
 
+class TestHintsNameTheBranch:
+    def test_tag_on_damaged_other_branch_names_it(self, temp_project_dir):
+        run_ilog("init", "test-project")
+        run_ilog("commit", "base")
+        run_ilog("branch", "feature")
+        run_ilog("commit", "f1")
+        run_ilog("branch", "main")
+        feature = temp_project_dir / ".intentlog" / "branches" / "feature.json"
+        data = json.loads(feature.read_text())
+        data["intents"][-1]["intent_reasoning"] = "TAMPERED"
+        feature.write_text(json.dumps(data, indent=2))
+
+        result = run_ilog("tag", data["intents"][-1]["intent_id"][:8], "x", "--branch", "feature")
+
+        assert result.returncode == 1
+        assert "verify --branch feature" in result.stdout
+
+    def test_legacy_unreadable_merge_source_points_to_a_working_repair(self, temp_project_dir):
+        run_ilog("init", "test-project")
+        run_ilog("commit", "base")
+        legacy = temp_project_dir / ".intentlog" / "branches" / "legacy.json"
+        legacy.write_text(json.dumps({"branch": "legacy", "intents": [
+            {"intent_id": "id-a", "intent_name": "a", "intent_reasoning": "ok",
+             "timestamp": "2024-01-01T10:00:00", "metadata": {}},
+            {"intent_id": "id-b", "intent_name": "b", "intent_reasoning": "no timestamp"},
+        ]}))
+
+        result = run_ilog("merge", "legacy")
+        assert result.returncode == 1
+        assert "migrate --force --branch legacy" in result.stdout
+        # The diagnostic agrees with the refusal
+        assert run_ilog("chain", "verify", "--branch", "legacy").returncode == 1
+
+
 class TestTagNoOp:
     def test_removing_absent_tag_rewrites_nothing(self, temp_project_dir):
         run_ilog("init", "test-project")

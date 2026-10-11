@@ -6,20 +6,51 @@ because the parsed value feeds the content hash.
 """
 
 import re
+import sys
 from datetime import datetime
+from typing import Optional
 
-# A date-and-time value whose only zone designator is a trailing 'Z'
-_Z_DATETIME = re.compile(r"\d{4}-\d{2}-\d{2}.\d{2}(?::\d{2}(?::\d{2}(?:\.\d+)?)?)?Z")
+# Extended-format ISO 8601 date-time: date, any separator, time with an
+# optional fraction ('.' or ','), then an optional zone ('Z' or an offset)
+_EXTENDED = re.compile(
+    r"(?P<base>\d{4}-\d{2}-\d{2}.\d{2}(?::\d{2}(?::\d{2}(?:[.,]\d+)?)?)?)"
+    r"(?P<zone>Z|[+-]\d{2}:\d{2})?"
+)
+_FRACTION = re.compile(r"[.,](\d+)$")
+
+
+def _as_python38_isoformat(value: str) -> Optional[str]:
+    """
+    Rewrite an extended-format value into a form fromisoformat() reads on
+    Python 3.8-3.10, with the meaning Python 3.11+ gives the original: a
+    ',' decimal becomes '.', the fraction is padded or truncated to six
+    digits (3.11+ truncates extra digits), and 'Z' becomes '+00:00'.
+
+    Returns None if the value is not extended-format ISO 8601.
+    """
+    match = _EXTENDED.fullmatch(value)
+    if not match:
+        return None
+    base = match.group("base")
+    fraction = _FRACTION.search(base)
+    if fraction:
+        base = base[:fraction.start()] + "." + (fraction.group(1) + "000000")[:6]
+    zone = match.group("zone") or ""
+    if zone == "Z":
+        zone = "+00:00"
+    return base + zone
 
 
 def parse_iso_datetime(value: str) -> datetime:
     """
     Parse an ISO 8601 timestamp as datetime.fromisoformat() does on 3.11+.
 
-    Before Python 3.11, fromisoformat() rejects a 'Z' UTC suffix. A
-    date-and-time value ending in 'Z' is then retried with '+00:00', so it
-    is read the same way on every supported Python. Nothing that 3.11+
-    rejects is accepted.
+    On Python 3.11 and later this is fromisoformat() itself. On older
+    versions, an extended-format value that fromisoformat() rejects there
+    (a 'Z' suffix, a ',' decimal, or a fraction that is not 3 or 6 digits
+    long) is rewritten to the equivalent form those versions accept, so it
+    is read the same way everywhere. Basic-format values (no '-' or ':'
+    separators) still need Python 3.11+.
 
     Raises:
         ValueError: If the value is not a valid timestamp
@@ -28,6 +59,8 @@ def parse_iso_datetime(value: str) -> datetime:
     try:
         return datetime.fromisoformat(value)
     except ValueError:
-        if isinstance(value, str) and _Z_DATETIME.fullmatch(value):
-            return datetime.fromisoformat(value[:-1] + "+00:00")
+        if sys.version_info < (3, 11) and isinstance(value, str):
+            rewritten = _as_python38_isoformat(value)
+            if rewritten is not None and rewritten != value:
+                return datetime.fromisoformat(rewritten)
         raise
