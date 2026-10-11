@@ -1377,15 +1377,39 @@ class TestRoundElevenFixes:
         with pytest.raises(ValueError):
             parse_iso_datetime(value)
 
-    def test_offset_with_fractional_seconds_is_never_misread(self):
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "2024-01-01T10:00:45+00:00:00.123456",
+            "2024-01-01T10:00:45+00:00.5",
+            "2024-01-01T10:00:45+00,5",
+            "2024-01-01T10:00:45+0000.5",
+            "2024-01-01T10:00:45-05:30:15,5",
+            "2024-01-01T10:00-0530.5",
+        ],
+    )
+    def test_offset_followed_by_a_fraction_is_never_misread(self, value):
         from intentlog.timestamps import parse_iso_datetime
 
-        value = "2024-01-01T10:00:45+00:00:00.123456"
-        if sys.version_info >= (3, 11):
-            assert parse_iso_datetime(value).isoformat() == value
-        else:  # older versions would drop the offset's fraction
-            with pytest.raises(ValueError):
-                parse_iso_datetime(value)
+        # Versions disagree on some of these (3.11 and 3.12 drop the fraction
+        # of a zero offset, 3.13 keeps it), so every such value is refused
+        with pytest.raises(ValueError):
+            parse_iso_datetime(value)
+
+    @pytest.mark.parametrize(
+        "value, expected",
+        [
+            ("2024-01-01T10:00:45.5-05:30", "2024-01-01T10:00:45.500000-05:30"),
+            ("2024-01-01T10:00:45,25-05:00", "2024-01-01T10:00:45.250000-05:00"),
+            ("2024-01-01T10:00:45-05:30", "2024-01-01T10:00:45-05:30"),
+            ("2024-01-01T10:00:45.1-05:30:15", "2024-01-01T10:00:45.100000-05:30:15"),
+            ("2024-01-01T10:00:45,123+00:00:00", "2024-01-01T10:00:45.123000+00:00"),
+        ],
+    )
+    def test_fraction_before_an_offset_is_still_read(self, value, expected):
+        from intentlog.timestamps import parse_iso_datetime
+
+        assert parse_iso_datetime(value).isoformat() == expected
 
     def test_merge_source_hint_names_the_source_branch(self, initialized_project):
         storage = initialized_project
@@ -1434,18 +1458,21 @@ class TestRoundElevenFixes:
 
 class TestBranchNamesOnEveryPath:
     @pytest.mark.parametrize("name", ["../escape", "../../x", "a/b", "bad name"])
-    def test_invalid_names_are_not_found_and_create_nothing(self, initialized_project, name):
-        storage = initialized_project
-        root = storage.intentlog_dir.parent
-        before = sorted(str(p) for p in root.parent.glob("*"))
+    def test_invalid_names_are_not_found_and_create_nothing(self, tmp_path, name):
+        # The project sits two levels down so an escaping name has somewhere
+        # private to land; the shared temp directory may change concurrently
+        project = tmp_path / "parent" / "project"
+        project.mkdir(parents=True)
+        storage = IntentLogStorage(project)
+        storage.init_project("test-project")
+        before = sorted(str(p) for p in tmp_path.rglob("*"))
 
         with pytest.raises(BranchNotFoundError):
             storage.load_intents(name)
         with pytest.raises(BranchNotFoundError):
             storage.save_intents([], name)
 
-        assert sorted(str(p) for p in root.parent.glob("*")) == before
-        assert not list((storage.intentlog_dir / "temp").rglob("*escape*"))
+        assert sorted(str(p) for p in tmp_path.rglob("*")) == before
 
 
 @pytest.mark.skipif(not CRYPTO_AVAILABLE, reason="cryptography not installed")
