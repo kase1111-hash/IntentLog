@@ -709,6 +709,43 @@ class TestUnreadableLegacyCli:
         assert intents_file.read_text() == before
 
 
+class TestMergeChecksSource:
+    def _project_with_feature(self, temp_project_dir):
+        run_ilog("init", "test-project")
+        run_ilog("commit", "base")
+        run_ilog("branch", "feature")
+        run_ilog("commit", "feat-1 original")
+        run_ilog("branch", "main")
+        return temp_project_dir / ".intentlog"
+
+    def test_tampered_source_is_refused_without_force(self, temp_project_dir):
+        root = self._project_with_feature(temp_project_dir)
+        feature = root / "branches" / "feature.json"
+        data = json.loads(feature.read_text())
+        data["intents"][-1]["intent_reasoning"] = "feat-1 TAMPERED"
+        feature.write_text(json.dumps(data, indent=2))
+        before = (root / "intents.json").read_text()
+
+        result = run_ilog("merge", "feature")
+        assert result.returncode == 1
+        assert "fails chain verification" in result.stdout
+        assert "--branch feature" in result.stdout
+        assert (root / "intents.json").read_text() == before
+
+        assert run_ilog("merge", "feature", "--force").returncode == 0
+
+    def test_unreadable_source_entry_is_refused(self, temp_project_dir):
+        root = self._project_with_feature(temp_project_dir)
+        feature = root / "branches" / "feature.json"
+        data = json.loads(feature.read_text())
+        del data["intents"][-1]["timestamp"]
+        feature.write_text(json.dumps(data, indent=2))
+
+        result = run_ilog("merge", "feature")
+        assert result.returncode == 1
+        assert "Traceback" not in result.stdout + result.stderr
+
+
 class TestTagNoOp:
     def test_removing_absent_tag_rewrites_nothing(self, temp_project_dir):
         run_ilog("init", "test-project")

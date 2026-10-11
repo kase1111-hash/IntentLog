@@ -550,6 +550,14 @@ def cmd_merge(args):
         # Hold the target branch lock for the whole load -> mutate -> save
         # sequence so a concurrent writer cannot cause a lost update.
         with storage.lock_branch(target_branch) as target_branch:
+            # A damaged source would be re-chained into a clean-looking
+            # target, or lose its unreadable entries: refuse unless --force
+            problem = storage.check_branch_integrity(source_branch)
+            if problem and not force:
+                print(f"Error: {problem}.")
+                print(f"Run 'ilog chain verify --branch {source_branch}' for details, "
+                      "or re-run with --force to merge anyway.")
+                sys.exit(1)
             source_intents = storage.load_intents(source_branch)
             target_intents = storage.load_intents(target_branch)
 

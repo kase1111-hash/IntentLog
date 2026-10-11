@@ -22,8 +22,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `ilog tag` no longer rewrites an intent when no tag changed.
 - `ilog chain verify` reports entries whose chain data was removed or cannot be read, including the first entry, instead of crashing or re-hashing the branch as if it had never been chained. `ilog commit` and `IntentLogStorage.add_intent()` refuse to append to such a branch, and `ilog chain migrate --force` rebuilds the chain from the first damaged entry, even when no entry is readable.
 - Branch names are validated on every storage path, so no branch name or `config.json` value can address a file outside `.intentlog/`.
-- Entries that cannot be read are never dropped silently. `ilog commit`, `ilog chain migrate`, `tag`, `link`, `merge` and `add_intent()` refuse to rewrite a branch that would lose them, on chained and legacy branches alike; `ilog chain migrate --force` drops them explicitly.
-- Date-and-time values with a `Z` UTC suffix are read on Python 3.8-3.10 as they are on 3.11+.
+- Entries that cannot be read are never dropped silently. `ilog commit`, `ilog chain migrate`, `tag`, `link`, `merge` and `add_intent()` refuse to rewrite a branch that would lose them, on chained and legacy branches alike; `ilog chain migrate --force --branch <name>` drops them explicitly. `ilog branch` copies the source verbatim, and the `@intent_logger` decorator logs a warning when it cannot save an intent instead of failing silently.
+- `ilog merge` checks the source branch as well as the target, so a tampered or unreadable source is not re-chained into a clean-looking target without `--force`.
+- A chained branch whose `chain_version` or `chain_hash` markers were removed is still treated as a damaged chain, so its signatures are never stripped by re-chaining it as legacy data.
+- Date-and-time values with a `Z` UTC suffix are read on Python 3.8-3.10 as they are on 3.11+, in chained and legacy entries alike, so a chain that verifies on one supported Python verifies on all of them.
 - `mkdocs build --strict` passes again, and the API reference only lists members that exist. The `docs` extra allows mkdocstrings 1.x, which works with current pymdown-extensions.
 - `examples/basic_usage.py`, `benchmarks/run_benchmarks.py` and the pytest-benchmark suite run against the v0.2.0 API.
 - `MANIFEST.in` no longer lists files that were deleted, and `setup.py` defers all metadata to `pyproject.toml`.

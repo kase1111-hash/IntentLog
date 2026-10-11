@@ -1091,3 +1091,38 @@ class TestDistributedTracing:
         with intent_scope("parent") as parent:
             with intent_scope("child") as child:
                 assert child.parent_span_id == parent.span_id
+
+
+class TestDecoratorPersistenceRefusal:
+    """A refused save is reported, never silently dropped."""
+
+    def test_refused_persistence_logs_a_warning(self, tmp_path, monkeypatch):
+        import json as _json
+
+        import intentlog.decorator as decorator_module
+        from intentlog.storage import IntentLogStorage
+
+        monkeypatch.chdir(tmp_path)
+        storage = IntentLogStorage(tmp_path)
+        storage.init_project("deco")
+        broken = {"intent_id": "id-b", "intent_name": "b", "intent_reasoning": "no timestamp"}
+        storage._get_branch_file("main").write_text(
+            _json.dumps({"branch": "main", "intents": [broken]})
+        )
+
+        warnings = []
+
+        class _Logger:
+            def warning(self, message, *args, **kwargs):
+                warnings.append(message)
+
+        monkeypatch.setattr(decorator_module, "get_logger", lambda *a, **k: _Logger())
+
+        @intent_logger(persist=True)
+        def work(x):
+            return x * 2
+
+        assert work(3) == 6
+        assert any("was not persisted" in w and "migrate --force" in w for w in warnings)
+        assert _json.loads(storage._get_branch_file("main").read_text())["intents"] == [broken]
+

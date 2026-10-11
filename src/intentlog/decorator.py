@@ -33,6 +33,7 @@ from .context import (
     IntentContext,
     IntentContextManager,
 )
+from .logging import get_logger
 from .storage import IntentLogStorage
 
 F = TypeVar("F", bound=Callable[..., Any])
@@ -186,8 +187,10 @@ def _log_intent(
                     sign=config.sign,
                 )
                 return context.intent_id
-        except Exception:
-            pass  # Silent failure for persistence
+        except Exception as e:
+            # Never break the decorated function, but say why nothing was saved
+            get_logger().warning(f"Intent '{intent_name}' was not persisted: {e}")
+            return None
 
     return context.intent_id if status == "completed" else None
 
