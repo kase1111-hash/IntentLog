@@ -574,7 +574,8 @@ class TestConcurrentAccess:
         config_file.write_text(json.dumps(config))
         project_root = storage.intentlog_dir.parent
 
-        with pytest.raises(ValidationError):
+        # load_config() refuses it, before any branch file or lock is touched
+        with pytest.raises(StorageError, match="'current_branch' is not a valid branch name"):
             storage.add_intent("a", "b")
 
         assert not list(project_root.rglob("escape*"))
@@ -1546,6 +1547,8 @@ class TestRoundThirteenFixes:
         "bom": b'\xef\xbb\xbf{"branch": "main", "intents": []}',
         "bad_utf8": b'{"branch": "main", "intents": [], "x": "\xff"}',
         "deep": b"[" * 100000 + b"]" * 100000,
+        # Keeping both sides of a merge conflict hides one value per key
+        "duplicate_keys": b'{"branch": "main", "intents": [{"intent_id": "a", "intent_id": "b"}]}',
     }
 
     @pytest.mark.parametrize("name", sorted(UNPARSEABLE))
@@ -1575,12 +1578,85 @@ class TestRoundThirteenFixes:
         storage.add_chained_intent("a", "kept")
         storage.config_path.write_bytes(content)
 
-        with pytest.raises(StorageError, match="config.json .*delete it and run 'ilog init'"):
+        with pytest.raises(StorageError, match="config.json .*delete it and run 'ilog init <project-name>'"):
             storage.load_config()
 
         storage.config_path.unlink()
         storage.init_project("recovered")
         assert [i.intent_name for i in storage.load_intents()] == ["a"]
+
+
+class TestRoundFourteenFixes:
+    """Files are read as UTF-8, configs are checked, init keeps .gitignore."""
+
+    def test_utf8_text_survives_a_non_utf8_default_encoding(self, initialized_project, monkeypatch):
+        import builtins
+
+        import intentlog.storage as storage_module
+
+        def cp1252_default_open(file, mode="r", *args, **kwargs):
+            if "b" not in mode and "encoding" not in kwargs and len(args) < 2:
+                kwargs["encoding"] = "cp1252"
+            return builtins.open(file, mode, *args, **kwargs)
+
+        storage = initialized_project
+        storage.add_chained_intent("café — naïve", "r")
+        # IntentLog writes non-ASCII text as escapes; an editor or another
+        # tool may store it as raw UTF-8 instead
+        path = storage._get_branch_file("main")
+        path.write_bytes(json.dumps(json.loads(path.read_text()), ensure_ascii=False).encode("utf-8"))
+        monkeypatch.setattr(storage_module, "open", cp1252_default_open, raising=False)
+
+        storage.add_chained_intent("next", "r")
+
+        assert [i.intent_name for i in storage.load_intents()] == ["café — naïve", "next"]
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            {},
+            {"project_name": 5},
+            {"project_name": "p", "llm": "x"},
+            {"project_name": "p", "llm": {"provider": 3}},
+            {"project_name": "p", "current_branch": 7},
+            {"project_name": "p", "current_branch": "x\x1b[2J\nInjected line"},
+            {"project_name": "p", "version": None},
+        ],
+    )
+    def test_unusable_config_is_refused_without_echoing_it(self, initialized_project, config):
+        storage = initialized_project
+        storage.config_path.write_text(json.dumps(config))
+
+        with pytest.raises(StorageError, match="is not a valid configuration") as excinfo:
+            storage.load_config()
+        assert "\x1b" not in str(excinfo.value)
+        assert "Injected" not in str(excinfo.value)
+
+    def test_reinit_keeps_gitignore_entries(self, initialized_project):
+        storage = initialized_project
+        gitignore = storage.intentlog_dir / ".gitignore"
+        gitignore.write_text(gitignore.read_text() + "mysecret.env\n")
+        storage.config_path.unlink()
+
+        storage.init_project("recovered")
+        after_first = gitignore.read_text()
+        storage.config_path.unlink()
+        storage.init_project("recovered")
+
+        assert "mysecret.env" in after_first.splitlines()
+        assert {"*.key", "temp/"} <= set(after_first.splitlines())
+        assert gitignore.read_text() == after_first
+
+    def test_init_adds_missing_default_entries(self, initialized_project):
+        storage = initialized_project
+        gitignore = storage.intentlog_dir / ".gitignore"
+        gitignore.write_text("mine")  # no trailing newline, no defaults
+
+        storage.init_project("again", force=True)
+
+        lines = gitignore.read_text().splitlines()
+        assert lines[0] == "mine"
+        assert {"*.key", "*.pem", "keys.json", "temp/"} <= set(lines)
 
 
 class TestBranchNamesOnEveryPath:

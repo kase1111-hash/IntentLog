@@ -671,6 +671,35 @@ class TestDamagedChainCommands:
             assert "Traceback" not in result.stdout + result.stderr
         assert path.read_text() == content
 
+    def test_union_merge_of_concurrent_commits_is_refused(self, temp_project_dir):
+        def git(*args):
+            subprocess.run(
+                ["git", "-c", "user.email=a@b", "-c", "user.name=a", *args],
+                cwd=temp_project_dir, capture_output=True, check=True,
+            )
+
+        run_ilog("init", "test-project")
+        git("init", "-q")
+        (temp_project_dir / ".gitattributes").write_text(".intentlog/*.json merge=union\n")
+        run_ilog("commit", "base")
+        git("add", "-A")
+        git("commit", "-qm", "base")
+        git("checkout", "-qb", "other")
+        run_ilog("commit", "theirs")
+        git("commit", "-qam", "theirs")
+        git("checkout", "-q", "-")
+        run_ilog("commit", "ours")
+        git("commit", "-qam", "ours")
+        git("merge", "-q", "--no-edit", "other")
+        path = temp_project_dir / ".intentlog" / "intents.json"
+        merged = path.read_text()
+
+        for args in (("chain", "verify"), ("log",), ("commit", "next")):
+            result = run_ilog(*args)
+            assert result.returncode == 1, args
+            assert "duplicate key" in result.stdout, result.stdout
+        assert path.read_text() == merged
+
     def test_chain_migrate_on_damaged_branch_needs_force(self, temp_project_dir):
         run_ilog("init", "test-project")
         run_ilog("commit", "first")

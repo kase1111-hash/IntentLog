@@ -41,7 +41,7 @@ def _atomic_write_json(path: Path, data: Any, indent: int = 2) -> None:
     parent = path.parent
     fd, tmp_path = tempfile.mkstemp(dir=parent, suffix=".tmp", prefix=".intentlog_")
     try:
-        with os.fdopen(fd, 'w') as f:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=indent)
         os.replace(tmp_path, path)
     except BaseException:
@@ -316,18 +316,70 @@ def _is_chained_data(data: Dict[str, Any]) -> bool:
     )
 
 
+# Entries 'ilog init' makes sure .intentlog/.gitignore has
+_GITIGNORE_ENTRIES = (
+    "*.key",
+    "*.pem",
+    "*.secret",
+    "keys.json",
+    "violations.jsonl",
+    "network_audit.jsonl",
+    "temp/",
+)
+
+_CONFIG_STRING_FIELDS = ("created_at", "current_branch", "version", "git_root")
+
+
+def _config_problem(data: Any) -> Optional[str]:
+    """
+    Describe why parsed config.json data is not a usable configuration, or
+    return None. Field values are never echoed: config.json may come from
+    a shared repository, and its text would reach the terminal.
+    """
+    if not isinstance(data, dict):
+        return "expected a JSON object"
+    if not isinstance(data.get("project_name"), str):
+        return "'project_name' must be a string"
+    for key in _CONFIG_STRING_FIELDS:
+        if key in data and not isinstance(data[key], str):
+            return f"'{key}' must be a string"
+    llm = data.get("llm", {})
+    if not isinstance(llm, dict) or not all(isinstance(v, str) for v in llm.values()):
+        return "'llm' must be an object of strings"
+    try:
+        validate_branch_name(data.get("current_branch", "main"))
+    except ValidationError:
+        return "'current_branch' is not a valid branch name"
+    return None
+
+
 _RESTORE_HINT = "Fix the file or restore it from a backup"
+
+
+def _reject_duplicate_keys(pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
+    """
+    json object hook: refuse an object that repeats a key. json.load()
+    would keep only the last value, hiding the others, which is what
+    keeping both sides of a git merge conflict produces.
+    """
+    result: Dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate key {key!r}, which would hide one of its values")
+        result[key] = value
+    return result
 
 
 def _load_json_file(path: Path, hint: str = _RESTORE_HINT) -> Any:
     """
-    Parse a JSON file under .intentlog/, reporting a file that cannot be
-    parsed (empty, truncated, merge conflict markers, invalid UTF-8, nesting
-    too deep) as a StorageError naming it, followed by ``hint``.
+    Parse a UTF-8 JSON file under .intentlog/, reporting a file that cannot
+    be read as written (empty, truncated, merge conflict markers, invalid
+    UTF-8, duplicate keys, nesting too deep) as a StorageError naming it,
+    followed by ``hint``.
     """
     try:
-        with open(path) as f:
-            return json.load(f)
+        with open(path, encoding="utf-8") as f:
+            return json.load(f, object_pairs_hook=_reject_duplicate_keys)
     except (ValueError, RecursionError) as e:
         raise StorageError(f"{path} is not valid JSON ({e}). {hint}") from e
 
@@ -528,17 +580,20 @@ class IntentLogStorage:
         else:
             logger.info("Keeping existing intents", path=str(main_intents_path))
 
-        # Create .gitignore for sensitive data
+        # Create .gitignore for sensitive data. An existing one keeps its
+        # entries (users and key generation add their own) and only gets the
+        # default entries it lacks.
         gitignore_path = self.intentlog_dir / ".gitignore"
-        with open(gitignore_path, 'w') as f:
-            f.write("# IntentLog sensitive data — never commit!\n")
-            f.write("*.key\n")
-            f.write("*.pem\n")
-            f.write("*.secret\n")
-            f.write("keys.json\n")
-            f.write("violations.jsonl\n")
-            f.write("network_audit.jsonl\n")
-            f.write("temp/\n")
+        current = gitignore_path.read_bytes() if gitignore_path.is_file() else b""
+        present = {line.strip() for line in current.splitlines()}
+        missing = [entry for entry in _GITIGNORE_ENTRIES if entry.encode() not in present]
+        if not current:
+            lines = ["# IntentLog sensitive data — never commit!"] + missing
+        else:
+            lines = ([""] if not current.endswith(b"\n") else []) + missing
+        if missing:
+            with open(gitignore_path, "a", encoding="utf-8") as f:
+                f.write("\n".join(lines) + "\n")
 
         logger.info("Project initialized successfully", project=project_name)
         return config
@@ -560,12 +615,14 @@ class IntentLogStorage:
             )
 
         hint = (
-            "Fix the file, or delete it and run 'ilog init' to recreate it "
-            "(intents are kept; settings such as the current branch are reset)"
+            "Fix the file, or delete it and run 'ilog init <project-name>' to "
+            "recreate it (intents are kept; settings such as the current branch "
+            "are reset)"
         )
         data = _load_json_file(self.config_path, hint)
-        if not isinstance(data, dict):
-            raise StorageError(f"{self.config_path} is not a valid configuration (expected a JSON object). {hint}")
+        problem = _config_problem(data)
+        if problem:
+            raise StorageError(f"{self.config_path} is not a valid configuration ({problem}). {hint}")
         return ProjectConfig.from_dict(data)
 
     def save_config(self, config: ProjectConfig) -> None:
