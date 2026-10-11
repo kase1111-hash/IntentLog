@@ -11,14 +11,15 @@ Features:
 - Branch divergence handling
 """
 
-import json
 import hashlib
+import json
 import logging
-from datetime import datetime
-from typing import List, Optional, Dict, Any, Tuple
 from dataclasses import dataclass, field
+from datetime import datetime
+from typing import Any, Dict, List, Optional
 
 from .core import Intent
+from .timestamps import parse_iso_datetime
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +74,7 @@ class ChainedIntent:
             raise ValueError(f"Missing required fields: {', '.join(missing_fields)}")
 
         try:
-            timestamp = datetime.fromisoformat(data["timestamp"])
+            timestamp = parse_iso_datetime(data["timestamp"])
         except (ValueError, TypeError) as e:
             raise ValueError(f"Invalid timestamp format: {e}") from e
 

@@ -14,12 +14,25 @@ from pathlib import Path
 from datetime import datetime, timedelta
 import random
 
-# Skip all tests if pytest-benchmark is not installed
+# Skip all tests if pytest-benchmark is not installed.  Import the plugin
+# module rather than the bare package: a stale, empty ``pytest_benchmark``
+# directory left on sys.path imports as a namespace package and would
+# otherwise look like an installed plugin while the fixture is missing.
 pytest_benchmark_installed = True
 try:
-    import pytest_benchmark
+    import pytest_benchmark.plugin  # noqa: F401
 except ImportError:
     pytest_benchmark_installed = False
+
+
+def _make_intents(count: int):
+    """Build plain intents for hash-chain benchmarks."""
+    from intentlog.core import Intent
+
+    return [
+        Intent(intent_name=f"item_{i}", intent_reasoning=f"Reasoning for item {i}")
+        for i in range(count)
+    ]
 
 
 # Fixtures
@@ -88,31 +101,30 @@ class TestCoreBenchmarks:
         benchmark(intent.to_dict)
 
     def test_intent_from_dict(self, benchmark):
-        """Benchmark Intent deserialization."""
+        """Benchmark Intent deserialization (ChainedIntent.from_dict rebuilds the Intent)."""
         from intentlog.core import Intent
+        from intentlog.merkle import ChainedIntent, chain_intents
 
-        data = {
-            "intent_id": "test-id",
-            "intent_name": "Test intent",
-            "intent_reasoning": "Test reasoning",
-            "timestamp": datetime.now().isoformat(),
-            "metadata": {"key": "value"},
-        }
+        intent = Intent(
+            intent_name="Test intent",
+            intent_reasoning="Test reasoning",
+            metadata={"key": "value"},
+        )
+        data = chain_intents([intent])[0].to_dict()
 
-        benchmark(Intent.from_dict, data)
+        benchmark(ChainedIntent.from_dict, data)
 
     def test_intentlog_add(self, benchmark):
         """Benchmark adding intents to IntentLog."""
-        from intentlog.core import Intent, IntentLog
+        from intentlog.core import IntentLog
 
         log = IntentLog()
 
         def add_intent():
-            intent = Intent(
-                intent_name="Benchmark intent",
-                intent_reasoning="Reasoning",
+            log.add_intent(
+                name="Benchmark intent",
+                reasoning="Reasoning",
             )
-            log.add(intent)
 
         benchmark(add_intent)
 
@@ -122,9 +134,13 @@ class TestCoreBenchmarks:
 
         log = IntentLog()
         for intent in sample_intents:
-            log.add(intent)
+            log.add_intent(
+                name=intent.intent_name,
+                reasoning=intent.intent_reasoning,
+                metadata=intent.metadata,
+            )
 
-        benchmark(log.search, "sample")
+        benchmark(log.search_intents, "sample")
 
 
 # Storage Module Benchmarks
@@ -194,39 +210,43 @@ class TestStorageBenchmarks:
 
 @pytest.mark.skipif(not pytest_benchmark_installed, reason="pytest-benchmark not installed")
 class TestMerkleBenchmarks:
-    """Benchmarks for Merkle tree operations."""
+    """Benchmarks for hash-chain (Merkle) operations."""
 
     def test_sha256_hash(self, benchmark):
-        """Benchmark SHA-256 hash computation."""
-        from intentlog.merkle import compute_hash
+        """Benchmark SHA-256 hash computation (canonical intent content hash)."""
+        from intentlog.core import Intent
+        from intentlog.merkle import compute_intent_content_hash
 
-        data = b"Sample data for hashing benchmark " * 10
+        intent = Intent(
+            intent_name="Hash benchmark",
+            intent_reasoning="Sample data for hashing benchmark " * 10,
+        )
 
-        benchmark(compute_hash, data)
+        benchmark(compute_intent_content_hash, intent)
 
     def test_merkle_tree_10(self, benchmark):
-        """Benchmark Merkle tree with 10 items."""
-        from intentlog.merkle import build_merkle_tree
+        """Benchmark hash chain with 10 items."""
+        from intentlog.merkle import chain_intents
 
-        items = [f"item_{i}".encode() for i in range(10)]
+        intents = _make_intents(10)
 
-        benchmark(build_merkle_tree, items)
+        benchmark(chain_intents, intents)
 
     def test_merkle_tree_100(self, benchmark):
-        """Benchmark Merkle tree with 100 items."""
-        from intentlog.merkle import build_merkle_tree
+        """Benchmark hash chain with 100 items."""
+        from intentlog.merkle import chain_intents
 
-        items = [f"item_{i}".encode() for i in range(100)]
+        intents = _make_intents(100)
 
-        benchmark(build_merkle_tree, items)
+        benchmark(chain_intents, intents)
 
     def test_merkle_tree_1000(self, benchmark):
-        """Benchmark Merkle tree with 1000 items."""
-        from intentlog.merkle import build_merkle_tree
+        """Benchmark hash chain with 1000 items."""
+        from intentlog.merkle import chain_intents
 
-        items = [f"item_{i}".encode() for i in range(1000)]
+        intents = _make_intents(1000)
 
-        benchmark(build_merkle_tree, items)
+        benchmark(chain_intents, intents)
 
 
 # Analytics Benchmarks

@@ -16,31 +16,25 @@ Features:
 
 import functools
 import inspect
-import time
-import uuid
 from datetime import datetime
+from enum import Enum
 from typing import (
-    Optional,
-    Dict,
     Any,
     Callable,
+    Dict,
+    List,
+    Optional,
     TypeVar,
     Union,
-    List,
     overload,
 )
-from enum import Enum
 
 from .context import (
     IntentContext,
     IntentContextManager,
-    get_current_intent,
-    get_current_session,
-    get_intent_chain,
 )
-from .core import Intent
+from .logging import get_logger
 from .storage import IntentLogStorage
-
 
 F = TypeVar("F", bound=Callable[..., Any])
 
@@ -193,8 +187,15 @@ def _log_intent(
                     sign=config.sign,
                 )
                 return context.intent_id
-        except Exception:
-            pass  # Silent failure for persistence
+        except Exception as e:
+            # Never break the decorated function, but say why nothing was
+            # saved. Reporting must not fail either (logging configuration
+            # comes from the environment and can itself raise).
+            try:
+                get_logger().warning(f"Intent '{intent_name}' was not persisted: {e}")
+            except Exception:
+                pass
+            return None
 
     return context.intent_id if status == "completed" else None
 

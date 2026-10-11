@@ -8,23 +8,23 @@ Commands: init, commit, branch, log, search, audit, status, diff, merge, config,
 import json as _json
 import sys
 from pathlib import Path
-from datetime import datetime
 
+from ..audit import audit_logs, print_audit_results
+from ..filelock import FileLockTimeout
+from ..git import detect_git_repo, get_git_context
 from ..storage import (
-    IntentLogStorage,
-    ProjectNotFoundError,
-    ProjectExistsError,
-    BranchNotFoundError,
     BranchExistsError,
+    BranchNotFoundError,
+    ChainIntegrityError,
+    IntentLogStorage,
+    ProjectExistsError,
+    ProjectNotFoundError,
+    SignatureLossError,
     compute_intent_hash,
 )
-from ..git import detect_git_repo, get_git_context
-from ..audit import audit_logs, print_audit_results
+from ..validation import ValidationError, validate_branch_name
 from .utils import (
-    get_storage,
-    load_config_or_exit,
     format_timestamp,
-    format_hash,
     get_semantic_engine,
 )
 
@@ -117,9 +117,10 @@ def cmd_commit(args):
             sign=sign,
             key_password=key_password,
         )
-        # Display short hash (first 12 chars of chain_hash)
-        short_hash = chained.chain_hash[:12]
-        print(f"[{short_hash}] {config.current_branch}: {name}")
+        # Display the intent hash: the same identifier log/search/show print
+        # and that show/tag/link accept
+        intent_hash = compute_intent_hash(chained.intent)
+        print(f"[{intent_hash}] {config.current_branch}: {name}")
         print(f"  Sequence: {chained.sequence}")
         if sign and chained.signature:
             print(f"  Signed: {chained.signature.get('key_id', 'unknown')}")
@@ -486,7 +487,6 @@ def cmd_diff(args):
         print(f"Comparing '{branch_a}' ({len(intents_a)} intents) to '{branch_b}' ({len(intents_b)} intents)\n")
 
         a_ids = {i.intent_id for i in intents_a}
-        b_ids = {i.intent_id for i in intents_b}
 
         new_in_b = [i for i in intents_b if i.intent_id not in a_ids]
         if new_in_b:
@@ -535,47 +535,71 @@ def cmd_merge(args):
     """Merge branches with LLM-assisted conflict resolution"""
     source_branch = args.source
     message = getattr(args, 'message', None)
+    force = getattr(args, 'force', False)
 
     storage = IntentLogStorage()
 
     try:
         config = storage.load_config()
         target_branch = config.current_branch
-        source_intents = storage.load_intents(source_branch)
-        target_intents = storage.load_intents(target_branch)
     except ProjectNotFoundError as e:
         print(f"Error: {e}")
         sys.exit(1)
-    except BranchNotFoundError as e:
+
+    try:
+        # Hold the target branch lock for the whole load -> mutate -> save
+        # sequence so a concurrent writer cannot cause a lost update.
+        with storage.lock_branch(target_branch) as target_branch:
+            # A damaged source would be re-chained into a clean-looking
+            # target, or lose its unreadable entries: refuse unless --force
+            problem = storage.check_branch_integrity(source_branch)
+            if problem and not force:
+                print(f"Error: {problem}.")
+                print("Re-run with --force to merge anyway.")
+                sys.exit(1)
+            source_intents = storage.load_intents(source_branch)
+            target_intents = storage.load_intents(target_branch)
+
+            # Find new intents in source
+            target_ids = {i.intent_id for i in target_intents}
+            new_intents = [i for i in source_intents if i.intent_id not in target_ids]
+
+            if not new_intents:
+                print(f"Already up to date with '{source_branch}'.")
+                return
+
+            print(f"Merging {len(new_intents)} intent(s) from '{source_branch}' into '{target_branch}'...")
+
+            # Add new intents to target. Appending never rewrites the target's
+            # chain, unless its stored chain is damaged: then refuse unless
+            # --force, so the merge cannot hide the damage.
+            for intent in new_intents:
+                target_intents.append(intent)
+
+            try:
+                removed = storage.save_intents(target_intents, target_branch, strict=not force)
+            except (ChainIntegrityError, SignatureLossError) as e:
+                print(f"Error: {e}.")
+                print("Re-run with --force to merge anyway.")
+                sys.exit(1)
+            if removed:
+                print(f"Warning: removed {removed} signature(s) invalidated by this merge.")
+
+            # Create merge commit if message provided
+            if message:
+                merge_intent = storage.add_intent(
+                    name=f"Merge {source_branch}",
+                    reasoning=message,
+                    metadata={"merge_from": source_branch, "merged_count": len(new_intents)},
+                    branch=target_branch,
+                )
+                merge_hash = compute_intent_hash(merge_intent)
+                print(f"[{merge_hash}] Merge commit created")
+    except (BranchNotFoundError, ValidationError) as e:
         print(f"Error: {e}")
         sys.exit(1)
-
-    # Find new intents in source
-    target_ids = {i.intent_id for i in target_intents}
-    new_intents = [i for i in source_intents if i.intent_id not in target_ids]
-
-    if not new_intents:
-        print(f"Already up to date with '{source_branch}'.")
-        return
-
-    print(f"Merging {len(new_intents)} intent(s) from '{source_branch}' into '{target_branch}'...")
-
-    # Add new intents to target
-    for intent in new_intents:
-        target_intents.append(intent)
-
-    storage.save_intents(target_intents, target_branch)
-
-    # Create merge commit if message provided
-    if message:
-        merge_intent = storage.add_intent(
-            name=f"Merge {source_branch}",
-            reasoning=message,
-            metadata={"merge_from": source_branch, "merged_count": len(new_intents)},
-            branch=target_branch,
-        )
-        merge_hash = compute_intent_hash(merge_intent)
-        print(f"[{merge_hash}] Merge commit created")
+    except FileLockTimeout as e:
+        _lock_timeout_exit(e)
 
     print(f"Merged {len(new_intents)} intent(s) from '{source_branch}'")
 
@@ -634,18 +658,26 @@ def cmd_config(args):
         print("Available: llm, show")
 
 
-def _find_intent(storage, intent_id, branch=None):
-    """Find an intent by ID or hash prefix. Returns (intent, intents_list, branch) or exits."""
-    try:
-        config = storage.load_config()
-        branch = branch or config.current_branch
-        intents = storage.load_intents(branch)
-    except ProjectNotFoundError as e:
-        print(f"Error: {e}")
-        sys.exit(1)
-    except BranchNotFoundError as e:
-        print(f"Error: {e}")
-        sys.exit(1)
+def _resolve_intent(storage, intent_id, branch=None):
+    """
+    Find an intent on a branch by ID or hash prefix, without exiting.
+
+    Matches, in order: an intent_id prefix, an intent hash prefix (the
+    identifier printed by commit/log/search/show), and finally a chain hash
+    prefix. The chain data is only loaded when the first two passes miss,
+    so the common case does not pay for it; the fallback keeps scripts that
+    captured the chain hash older versions of 'ilog commit' printed working
+    until the intent, or an earlier intent on its branch, is tagged or linked:
+    that re-chains it, so its chain hash changes.
+
+    Returns (intent_or_None, intents_list, branch). The returned intent is
+    the object from intents_list, so callers may mutate it and save the list.
+
+    Raises ProjectNotFoundError / BranchNotFoundError like load_intents().
+    """
+    config = storage.load_config()
+    branch = branch or config.current_branch
+    intents = storage.load_intents(branch)
 
     for intent in intents:
         if intent.intent_id.startswith(intent_id):
@@ -653,8 +685,34 @@ def _find_intent(storage, intent_id, branch=None):
         if compute_intent_hash(intent).startswith(intent_id):
             return intent, intents, branch
 
-    print(f"Error: No intent matching '{intent_id}' on branch '{branch}'")
-    sys.exit(1)
+    by_id = {intent.intent_id: intent for intent in intents}
+    for chained in storage.load_chained_intents(branch):
+        chain_hash = getattr(chained, "chain_hash", "")
+        if chain_hash and chain_hash.startswith(intent_id):
+            inner = getattr(chained, "intent", chained)
+            found = by_id.get(inner.intent_id)
+            if found is not None:
+                return found, intents, branch
+
+    return None, intents, branch
+
+
+def _find_intent(storage, intent_id, branch=None):
+    """Find an intent by ID or hash prefix. Returns (intent, intents_list, branch) or exits."""
+    try:
+        found, intents, branch = _resolve_intent(storage, intent_id, branch)
+    except ProjectNotFoundError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+    except BranchNotFoundError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+
+    if found is None:
+        print(f"Error: No intent matching '{intent_id}' on branch '{branch}'")
+        sys.exit(1)
+
+    return found, intents, branch
 
 
 def cmd_show(args):
@@ -684,14 +742,14 @@ def cmd_show(args):
     # Git context
     git_ctx = found.metadata.get("git_context", {})
     if git_ctx:
-        print(f"\nGit Context:")
+        print("\nGit Context:")
         if git_ctx.get("branch"):
             print(f"  Branch: {git_ctx['branch']}")
         if git_ctx.get("commit"):
             print(f"  Commit: {git_ctx['commit']}")
         staged = git_ctx.get("staged_files", [])
         if staged:
-            print(f"  Staged files:")
+            print("  Staged files:")
             for f in staged[:20]:
                 print(f"    {f}")
             if len(staged) > 20:
@@ -700,7 +758,7 @@ def cmd_show(args):
     # Attached files
     attached = found.metadata.get("attached_files", {})
     if attached:
-        print(f"\nAttached Files:")
+        print("\nAttached Files:")
         for fpath, fhash in list(attached.items())[:20]:
             print(f"  {fhash} {fpath}")
 
@@ -712,7 +770,7 @@ def cmd_show(args):
     # Links
     links = found.metadata.get("links", [])
     if links:
-        print(f"\nLinked intents:")
+        print("\nLinked intents:")
         for link_id in links:
             print(f"  -> {link_id[:12]}")
 
@@ -720,7 +778,7 @@ def cmd_show(args):
     _displayed = ("git_context", "attached_files", "tags", "links")
     other_meta = {k: v for k, v in found.metadata.items() if k not in _displayed}
     if other_meta:
-        print(f"\nMetadata:")
+        print("\nMetadata:")
         for k, v in other_meta.items():
             print(f"  {k}: {v}")
 
@@ -742,7 +800,7 @@ def cmd_hooks(args):
         print("Run 'ilog init' in a git repository first.")
         sys.exit(1)
 
-    from ..git import install_hooks, uninstall_hooks, hooks_status
+    from ..git import hooks_status, install_hooks, uninstall_hooks
 
     git_root = Path(config.git_root)
 
@@ -779,6 +837,8 @@ def cmd_hooks(args):
         print("Git hook status:")
         for hook, state in status.items():
             print(f"  {hook}: {state}")
+        if "outdated" in status.values():
+            print("Run 'ilog hooks install' to update outdated hooks.")
 
     else:
         print(f"Unknown action: {action}")
@@ -846,8 +906,37 @@ def cmd_blame(args):
                 print(f"  Intent: {intent.intent_name}")
                 print(f"    {reasoning}")
         else:
-            print(f"  (no intent recorded)")
+            print("  (no intent recorded)")
         print()
+
+
+def _lock_timeout_exit(error):
+    """Report a lock that another ilog process held for too long, then exit."""
+    print(f"Error: {error}")
+    print("Another ilog command is still writing to this branch; try again.")
+    sys.exit(1)
+
+
+def _save_annotation(storage, intents, branch, force):
+    """
+    Save intents after a metadata edit (tag or link).
+
+    Tags and links live in the hashed metadata, so editing an intent re-chains
+    it and every later intent. Without --force, refuse when that would remove
+    signatures or overwrite chain entries that already fail verification.
+    """
+    try:
+        removed = storage.save_intents(intents, branch, strict=not force)
+    except SignatureLossError as e:
+        print(f"Error: {e}.")
+        print("Re-run with --force to apply the change and remove those signatures.")
+        sys.exit(1)
+    except ChainIntegrityError as e:
+        print(f"Error: {e}.")
+        print("Re-run with --force to rewrite the branch anyway.")
+        sys.exit(1)
+    if removed:
+        print(f"Warning: removed {removed} signature(s) invalidated by this change.")
 
 
 def cmd_tag(args):
@@ -856,33 +945,76 @@ def cmd_tag(args):
     tags = args.tags
     remove = getattr(args, 'remove', False)
     branch = getattr(args, 'branch', None)
+    force = getattr(args, 'force', False)
 
     storage = IntentLogStorage()
-    found, intents, branch = _find_intent(storage, intent_id, branch)
 
-    # Initialize tags list in metadata
-    current_tags = found.metadata.get("tags", [])
+    try:
+        # Hold the branch lock for the whole load -> mutate -> save sequence
+        with storage.lock_branch(branch) as branch:
+            found, intents, branch = _find_intent(storage, intent_id, branch)
 
-    if remove:
-        for tag in tags:
-            if tag in current_tags:
-                current_tags.remove(tag)
-                print(f"  Removed tag: {tag}")
+            # Initialize tags list in metadata
+            current_tags = found.metadata.get("tags", [])
+
+            # Report changes only once they are saved
+            notes = []
+            changed = False
+            if remove:
+                for tag in tags:
+                    if tag in current_tags:
+                        current_tags.remove(tag)
+                        changed = True
+                        notes.append(f"  Removed tag: {tag}")
+                    else:
+                        notes.append(f"  Tag not found: {tag}")
             else:
-                print(f"  Tag not found: {tag}")
-    else:
-        for tag in tags:
-            if tag not in current_tags:
-                current_tags.append(tag)
-                print(f"  Added tag: {tag}")
-            else:
-                print(f"  Already tagged: {tag}")
+                for tag in tags:
+                    if tag not in current_tags:
+                        current_tags.append(tag)
+                        changed = True
+                        notes.append(f"  Added tag: {tag}")
+                    else:
+                        notes.append(f"  Already tagged: {tag}")
 
-    found.metadata["tags"] = current_tags
-    storage.save_intents(intents, branch)
+            # Tags are hashed content: only rewrite the intent if they changed
+            if changed:
+                found.metadata["tags"] = current_tags
+                _save_annotation(storage, intents, branch, force)
+            for note in notes:
+                print(note)
+    except (ProjectNotFoundError, ValidationError) as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+    except FileLockTimeout as e:
+        _lock_timeout_exit(e)
 
     intent_hash = compute_intent_hash(found)
     print(f"[{intent_hash}] tags: {', '.join(current_tags) if current_tags else '(none)'}")
+
+
+def _resolve_link_target(storage, target_id, source_branch):
+    """
+    Resolve the target of a link: on the source branch first, then on every
+    other branch, so a decision can point at reasoning recorded elsewhere.
+
+    Returns (intent, branch) for the first match, or (None, None).
+    """
+    found, _, _ = _resolve_intent(storage, target_id, source_branch)
+    if found is not None:
+        return found, source_branch
+
+    for other in storage.list_branches():
+        if other == source_branch:
+            continue
+        try:
+            found, _, _ = _resolve_intent(storage, target_id, other)
+        except BranchNotFoundError:
+            continue
+        if found is not None:
+            return found, other
+
+    return None, None
 
 
 def cmd_link(args):
@@ -890,27 +1022,52 @@ def cmd_link(args):
     source_id = args.source
     target_id = args.target
     branch = getattr(args, 'branch', None)
+    force = getattr(args, 'force', False)
 
     storage = IntentLogStorage()
-    source, intents, branch = _find_intent(storage, source_id, branch)
-    target, _, _ = _find_intent(storage, target_id, branch)
 
-    # Add link to source intent's metadata
-    links = source.metadata.get("links", [])
-    target_ref = target.intent_id
+    try:
+        # Resolve the target first, without holding any lock: it only reads,
+        # and taking other branches' locks while holding this one could
+        # deadlock against a link in the opposite direction.
+        source_branch = validate_branch_name(branch or storage.load_config().current_branch)
+        try:
+            target, target_branch = _resolve_link_target(storage, target_id, source_branch)
+        except BranchNotFoundError as e:
+            print(f"Error: {e}")
+            sys.exit(1)
+        if target is None:
+            print(f"Error: No intent matching '{target_id}' on any branch")
+            sys.exit(1)
 
-    if target_ref in links:
-        print(f"Already linked: {source.intent_id[:12]} -> {target.intent_id[:12]}")
-        return
+        # Hold the source branch lock for the whole load -> mutate -> save sequence
+        with storage.lock_branch(source_branch) as branch:
+            source, intents, branch = _find_intent(storage, source_id, branch)
 
-    links.append(target_ref)
-    source.metadata["links"] = links
-    storage.save_intents(intents, branch)
+            # Add link to source intent's metadata
+            links = source.metadata.get("links", [])
+            target_ref = target.intent_id
+
+            if target_ref in links:
+                print(f"Already linked: {source.intent_id[:12]} -> {target.intent_id[:12]}")
+                return
+
+            links.append(target_ref)
+            source.metadata["links"] = links
+            _save_annotation(storage, intents, branch, force)
+    except (ProjectNotFoundError, ValidationError) as e:
+        print(f"Error: {e}")
+        sys.exit(1)
+    except FileLockTimeout as e:
+        _lock_timeout_exit(e)
 
     source_hash = compute_intent_hash(source)
     target_hash = compute_intent_hash(target)
     print(f"Linked [{source_hash}] {source.intent_name}")
-    print(f"    -> [{target_hash}] {target.intent_name}")
+    if target_branch != branch:
+        print(f"    -> [{target_hash}] {target.intent_name} (on branch '{target_branch}')")
+    else:
+        print(f"    -> [{target_hash}] {target.intent_name}")
 
 
 def register_core_commands(subparsers):
@@ -975,6 +1132,8 @@ def register_core_commands(subparsers):
     merge_parser = subparsers.add_parser("merge", help="Merge branches")
     merge_parser.add_argument("source", help="Source branch to merge from")
     merge_parser.add_argument("--message", "-m", help="Merge commit message")
+    merge_parser.add_argument("--force", action="store_true",
+                              help="Merge even if the target branch's stored chain is damaged")
     merge_parser.set_defaults(func=cmd_merge)
 
     # config command
@@ -1013,6 +1172,8 @@ def register_core_commands(subparsers):
     tag_parser.add_argument("tags", nargs="+", help="Tags to add or remove")
     tag_parser.add_argument("--remove", "-r", action="store_true", help="Remove tags instead of adding")
     tag_parser.add_argument("--branch", "-b", help="Branch to search")
+    tag_parser.add_argument("--force", action="store_true",
+                            help="Apply the change even if it removes signatures from re-chained intents")
     tag_parser.set_defaults(func=cmd_tag)
 
     # link command
@@ -1020,4 +1181,6 @@ def register_core_commands(subparsers):
     link_parser.add_argument("source", help="Source intent ID or hash prefix")
     link_parser.add_argument("target", help="Target intent ID or hash prefix")
     link_parser.add_argument("--branch", "-b", help="Branch to search")
+    link_parser.add_argument("--force", action="store_true",
+                             help="Apply the change even if it removes signatures from re-chained intents")
     link_parser.set_defaults(func=cmd_link)

@@ -73,8 +73,9 @@ nav:
       - Crypto: api/crypto.md
       - Analytics: api/analytics.md
       - Semantic: api/semantic.md
-  - Contributing: CONTRIBUTING.md
-  - Changelog: CHANGELOG.md
+      - CLI: api/cli.md
+  - Contributing: contributing.md
+  - Changelog: changelog.md
 
 extra:
   social:

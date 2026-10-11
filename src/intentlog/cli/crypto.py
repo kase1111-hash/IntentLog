@@ -6,7 +6,13 @@ Commands: keys, chain
 
 import sys
 
-from ..storage import IntentLogStorage, ProjectNotFoundError, BranchNotFoundError
+from ..storage import (
+    BranchNotFoundError,
+    ChainIntegrityError,
+    IntentLogStorage,
+    ProjectNotFoundError,
+    SignatureLossError,
+)
 from .utils import load_config_or_exit
 
 
@@ -15,9 +21,9 @@ def cmd_keys(args):
     action = args.action
 
     storage = IntentLogStorage()
-    config = load_config_or_exit(storage)
+    load_config_or_exit(storage)
 
-    from ..crypto import KeyManager, CryptoNotAvailableError, KeyNotFoundError
+    from ..crypto import CryptoNotAvailableError, KeyManager, KeyNotFoundError
 
     try:
         key_manager = KeyManager(storage.intentlog_dir)
@@ -41,10 +47,10 @@ def cmd_keys(args):
             key_pair = key_manager.generate_key(name=name, password=password)
             print(f"Generated key pair: {name}")
             print(f"  Key ID: {key_pair.key_id}")
-            print(f"  Algorithm: Ed25519")
+            print("  Algorithm: Ed25519")
             print(f"  Created: {key_pair.created_at}")
             if password:
-                print(f"  Encrypted: Yes")
+                print("  Encrypted: Yes")
             print(f"\nPublic key saved to: .intentlog/keys/{name}.pub")
             print(f"Private key saved to: .intentlog/keys/{name}.key")
         except Exception as e:
@@ -125,9 +131,9 @@ def cmd_chain(args):
         result = storage.verify_chain(branch)
 
         if result.valid:
-            print(f"Chain verification: PASSED")
+            print("Chain verification: PASSED")
         else:
-            print(f"Chain verification: FAILED")
+            print("Chain verification: FAILED")
 
         print(f"Entries checked: {result.entries_checked}")
         print(f"Root hash: {result.root_hash[:16]}...")
@@ -150,14 +156,19 @@ def cmd_chain(args):
     elif action == "migrate":
         print(f"Migrating branch '{branch}' to chain format...")
 
-        count = storage.migrate_to_chain(branch)
+        try:
+            count = storage.migrate_to_chain(branch, force=getattr(args, "force", False))
+        except (ChainIntegrityError, SignatureLossError) as e:
+            print(f"Error: {e}.")
+            print("Re-run with --force to rewrite the damaged entries anyway.")
+            sys.exit(1)
 
         if count > 0:
             print(f"Migrated {count} intents to chain format.")
             root_hash = storage.get_root_hash(branch)
             print(f"Root hash: {root_hash[:16]}...")
         else:
-            print("No intents to migrate.")
+            print("No readable intents to migrate.")
 
     elif action == "status":
         try:
@@ -230,4 +241,6 @@ def register_crypto_commands(subparsers):
     chain_parser.add_argument("--branch", "-b", help="Branch to operate on")
     chain_parser.add_argument("--sequence", "-s", type=int,
                               help="Sequence number for proof")
+    chain_parser.add_argument("--force", action="store_true",
+                              help="migrate: rewrite damaged chain entries anyway")
     chain_parser.set_defaults(func=cmd_chain)

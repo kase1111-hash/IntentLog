@@ -17,12 +17,26 @@ Manages Ed25519 signing keys.
       show_root_heading: true
       members:
         - generate_key
+        - has_keys
         - list_keys
         - get_default_key_name
         - set_default_key
+        - load_key
+        - load_public_key
         - export_public_key
-        - sign
-        - verify
+
+## Signing Functions
+
+Intents are signed and verified with module-level helpers that take a
+`KeyManager`.
+
+::: intentlog.crypto.sign_intent
+    options:
+      show_root_heading: true
+
+::: intentlog.crypto.verify_intent_signature
+    options:
+      show_root_heading: true
 
 ## KeyPair
 
@@ -66,12 +80,16 @@ print(f"Created: {key_pair.created_at}")
 ### Signing and Verification
 
 ```python
-# Sign data
-data = b"intent data to sign"
-signature = key_manager.sign(data, key_name="signing-key")
+from intentlog.crypto import sign_intent, verify_intent_signature
 
-# Verify signature
-is_valid = key_manager.verify(data, signature, key_name="signing-key")
+# Sign a dictionary of intent data
+data = {"intent_id": "abc123", "intent_hash": "..."}
+signature = sign_intent(
+    data, key_manager, key_name="signing-key", password="optional-password"
+)
+
+# Verify the signature (raises SignatureError if invalid)
+is_valid = verify_intent_signature(data, signature, key_manager)
 print(f"Signature valid: {is_valid}")
 ```
 

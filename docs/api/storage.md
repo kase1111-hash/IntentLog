@@ -28,7 +28,7 @@ Main storage class for managing IntentLog projects.
 
 An intent with Merkle chain linking.
 
-::: intentlog.storage.ChainedIntent
+::: intentlog.merkle.ChainedIntent
     options:
       show_root_heading: true
 

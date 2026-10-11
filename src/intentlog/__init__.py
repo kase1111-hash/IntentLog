@@ -11,45 +11,47 @@ __license__ = "CC BY-SA 4.0"
 
 # ---- Core imports (always available, no external deps) ----
 
-from .core import IntentLog, Intent
 from .audit import audit_logs
+from .core import Intent, IntentLog
 from .logging import (
+    IntentLogLogger,
+    LogContext,
+    LogFormat,
     configure_logging,
     get_logger,
     log_context,
     log_function_call,
-    LogFormat,
+)
+from .logging import (
     LogLevel as StructuredLogLevel,
-    LogContext,
-    IntentLogLogger,
-)
-from .validation import (
-    validate_project_name,
-    validate_branch_name,
-    validate_path_within_directory,
-    sanitize_filename,
-    ValidationError,
-)
-from .storage import (
-    IntentLogStorage,
-    ProjectConfig,
-    LLMSettings,
-    compute_intent_hash,
-    find_project_root,
-    StorageError,
-    ProjectNotFoundError,
-    ProjectExistsError,
-    BranchNotFoundError,
-    BranchExistsError,
 )
 from .merkle import (
+    GENESIS_HASH,
     ChainedIntent,
+    ChainVerificationResult,
     MerkleChain,
     chain_intents,
-    verify_chain,
     compute_root_hash,
-    ChainVerificationResult,
-    GENESIS_HASH,
+    verify_chain,
+)
+from .storage import (
+    BranchExistsError,
+    BranchNotFoundError,
+    IntentLogStorage,
+    LLMSettings,
+    ProjectConfig,
+    ProjectExistsError,
+    ProjectNotFoundError,
+    StorageError,
+    compute_intent_hash,
+    find_project_root,
+)
+from .validation import (
+    ValidationError,
+    sanitize_filename,
+    validate_branch_name,
+    validate_path_within_directory,
+    validate_project_name,
 )
 
 # ---- Crypto availability flag (set by lazy loader or direct import) ----

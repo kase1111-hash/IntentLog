@@ -15,8 +15,10 @@ The `Intent` class represents a single unit of recorded reasoning.
         - intent_reasoning
         - timestamp
         - metadata
+        - parent_intent_id
+        - trust_level
         - to_dict
-        - from_dict
+        - validate
 
 ## IntentLog
 
@@ -26,11 +28,11 @@ The `IntentLog` class manages a collection of intents.
     options:
       show_root_heading: true
       members:
-        - add
-        - get
-        - search
-        - to_dict
-        - from_dict
+        - add_intent
+        - get_intent
+        - get_intent_chain
+        - search_intents
+        - export_to_dict
 
 ## Usage Examples
 
@@ -55,14 +57,18 @@ print(f"Created at: {intent.timestamp}")
 ```python
 from intentlog.core import IntentLog
 
-log = IntentLog()
+log = IntentLog(project_name="my-project")
 
 # Add intents
-log.add(intent)
+intent = log.add_intent(
+    name="Implement caching layer",
+    reasoning="Adding Redis caching to reduce database load and improve response times",
+    metadata={"category": "performance"},
+)
 
 # Search by content
-results = log.search("caching")
+results = log.search_intents("caching")
 
 # Export to dictionary
-data = log.to_dict()
+data = log.export_to_dict()
 ```

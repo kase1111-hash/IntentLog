@@ -41,6 +41,14 @@ ilog commit <message> [options]
 
 Automatically captures git context (branch, HEAD hash, staged files) as `metadata.git_context`.
 
+Prints the new intent as `[<hash>] <branch>: <name>`. `<hash>` is the 12-character
+intent hash, the same identifier `ilog log` and `ilog search` print, and it can be
+passed to `ilog show`, `ilog tag` and `ilog link`. The hash covers the intent's
+content *and* metadata, so it changes as soon as the intent is tagged or linked.
+Scripts that need a stable reference should capture the intent ID instead:
+`ilog show <hash>` prints it on the `ID:` line and `ilog log --json` exposes it
+as `intent_id`.
+
 ### log
 
 Show intent history.
@@ -61,12 +69,19 @@ ilog log [--limit N] [--branch NAME] [--git-commit HASH] [--json]
 Display a single intent with full metadata.
 
 ```bash
-ilog show <id> [--json]
+ilog show <id> [--branch NAME] [--json]
 ```
 
 | Option | Description |
 |--------|-------------|
+| `--branch, -b` | Branch to search (default: current) |
 | `--json` | Output as JSON for scripting |
+
+`<id>` is a prefix of the intent ID, of the intent hash printed by `commit`,
+`log` and `search`, or of the `chain_hash` stored in the branch file under
+`.intentlog/` (what older versions of `ilog commit` printed). Only the intent ID
+is stable: tagging or linking an intent changes its intent hash and chain hash,
+and the chain hash of every later intent on the branch.
 
 ### search
 
@@ -125,8 +140,19 @@ ilog diff main..feature   # explicit
 Merge branches.
 
 ```bash
-ilog merge <source> [--message MSG]
+ilog merge <source> [--message MSG] [--force]
 ```
+
+| Option | Description |
+|--------|-------------|
+| `--message, -m` | Also record a merge intent with this reasoning |
+| `--force` | Merge even if the target branch's stored chain is damaged |
+
+Merged intents are appended to the current branch's chain; the intents and
+signatures already on it are kept unchanged. If the stored chain is damaged
+(for example an entry whose chain data was removed by hand), appending would
+rewrite the damaged part and hide it from `ilog chain verify`, so the merge is
+refused unless `--force` is given.
 
 ### blame
 
@@ -148,7 +174,19 @@ ilog hooks <action>
 
 Actions: `install`, `uninstall`, `status`
 
-Installs a `prepare-commit-msg` git hook that prompts for intent when committing.
+`install` adds two hooks. `prepare-commit-msg` shows the latest recorded intent
+as a marked block of comment lines when git opens the commit message editor.
+`commit-msg` removes that block again before git stores the message, so the
+stored commit message does not contain it, whatever the cleanup mode. The one
+exception is `git commit --no-verify`, which skips `commit-msg`: the block is
+then dropped only if git strips comment lines, as it does by default. Commits
+made with `-m`, `-F`, a template, `--no-edit`, merges and amends are left
+untouched. Hooks you wrote yourself are never overwritten: `install` does
+nothing if either hook already exists and was not installed by IntentLog.
+
+`status` reports each hook as `installed`, `outdated` (installed by an older
+IntentLog; run `ilog hooks install` again to update it), `foreign` or
+`not installed`.
 
 ### config
 
@@ -172,19 +210,44 @@ ilog audit
 
 ### tag
 
-Tag an intent.
+Add or remove tags on an intent.
 
 ```bash
-ilog tag <intent-id> <name>
+ilog tag <intent-id> <tag>... [--remove] [--branch NAME] [--force]
 ```
+
+| Option | Description |
+|--------|-------------|
+| `--remove, -r` | Remove the tags instead of adding them |
+| `--branch, -b` | Branch to search (default: current) |
+| `--force` | Apply the change even if it removes signatures |
+
+Tags are stored in the intent's hashed metadata, so changing them re-chains
+that intent and every later intent on the branch. Intents before it keep their
+hashes and signatures. If any re-chained intent is signed, the command refuses
+and changes nothing, because the change would invalidate those signatures.
+`--force` applies it anyway and removes the invalidated signatures. The command
+also refuses when the part of the chain it would rewrite already fails
+`ilog chain verify`, so that a rewrite never hides evidence of tampering.
 
 ### link
 
-Link an external resource to an intent.
+Link two related intents.
 
 ```bash
-ilog link <intent-id> <url>
+ilog link <source-id> <target-id> [--branch NAME] [--force]
 ```
+
+| Option | Description |
+|--------|-------------|
+| `--branch, -b` | Branch holding the source intent (default: current) |
+| `--force` | Apply the change even if it removes signatures |
+
+The target is looked up on the source's branch first, then on every other
+branch, so a decision on `main` can link to an exploration recorded on a
+feature branch. The link is stored on the source intent as `metadata.links`
+(a list of target intent IDs) and listed by `ilog show`. Like `tag`, this edits
+hashed metadata, so the same signature rules and `--force` flag apply.
 
 ## Analytics Commands
 
@@ -257,6 +320,12 @@ Actions: `verify`, `migrate`, `status`, `proof`
 |--------|-------------|
 | `--branch, -b` | Target branch |
 | `--sequence, -s` | Sequence for proof |
+| `--force` | `migrate`: rewrite damaged chain entries anyway |
+
+`migrate` adds chain data to a branch recorded without it, and keeps any chain
+data already stored. It refuses to rewrite stored chain entries that are
+damaged, because that would hide the damage from `verify`, unless `--force` is
+given.
 
 ## Formalization Commands
 

@@ -3,10 +3,9 @@ Shared utilities for IntentLog CLI commands.
 """
 
 import sys
-from pathlib import Path
 from datetime import datetime
 
-from ..storage import IntentLogStorage, ProjectNotFoundError, compute_intent_hash
+from ..storage import IntentLogStorage, ProjectNotFoundError
 
 
 def get_storage():

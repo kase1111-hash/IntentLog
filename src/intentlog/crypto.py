@@ -11,24 +11,24 @@ Features:
 - Key storage and loading from .intentlog/keys/
 """
 
-import json
 import hashlib
+import json
 import os
-from pathlib import Path
-from datetime import datetime
-from typing import Optional, Dict, Any, Tuple
 from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Dict, Optional, Tuple
 
 from .validation import validate_key_name
 
 # Use cryptography library for Ed25519
 try:
+    from cryptography.exceptions import InvalidSignature
     from cryptography.hazmat.primitives import serialization
     from cryptography.hazmat.primitives.asymmetric.ed25519 import (
         Ed25519PrivateKey,
         Ed25519PublicKey,
     )
-    from cryptography.exceptions import InvalidSignature
     CRYPTO_AVAILABLE = True
 except BaseException:
     CRYPTO_AVAILABLE = False
@@ -348,15 +348,20 @@ class KeyManager:
         # Add to .gitignore if not already there
         gitignore = self.intentlog_dir / ".gitignore"
         if gitignore.exists():
-            content = gitignore.read_text()
-            if "keys/*.key" not in content:
-                with open(gitignore, "a") as f:
+            from .storage import _gitignore_patterns
+
+            # Read as bytes: the file may be in any encoding (older versions
+            # wrote it in the locale's). Only a line git reads as exactly
+            # this pattern counts.
+            content = gitignore.read_bytes()
+            if b"keys/*.key" not in _gitignore_patterns(content):
+                with open(gitignore, "a", encoding="utf-8") as f:
                     f.write("\n# Private keys - never commit!\nkeys/*.key\n")
 
     def _load_metadata(self) -> Dict[str, Any]:
         """Load key metadata"""
         if self.metadata_file.exists():
-            with open(self.metadata_file, "r") as f:
+            with open(self.metadata_file) as f:
                 return json.load(f)
         return {"keys": {}, "default_key": None}
 

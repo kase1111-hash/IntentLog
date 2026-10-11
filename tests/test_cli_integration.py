@@ -4,14 +4,16 @@ CLI Integration Tests for IntentLog
 These tests verify the CLI commands work correctly end-to-end.
 """
 
-import os
 import json
-import tempfile
+import os
 import shutil
 import subprocess
+import tempfile
 from pathlib import Path
 
 import pytest
+
+from intentlog import CRYPTO_AVAILABLE
 
 
 @pytest.fixture
@@ -276,3 +278,593 @@ class TestHelpFlag:
         assert "log" in result.stdout
         assert "search" in result.stdout
         assert "audit" in result.stdout
+
+
+def _latest_intent_id(branch=None):
+    """Return the intent_id of the newest intent on a branch via 'ilog log --json'"""
+    args = ["log", "--json"]
+    if branch:
+        args += ["--branch", branch]
+    result = run_ilog(*args)
+    assert result.returncode == 0, result.stdout
+    return json.loads(result.stdout)[0]["intent_id"]
+
+
+def _read_intents(intents_file):
+    """Load a branch file and index its intents by intent_id"""
+    with open(intents_file) as f:
+        data = json.load(f)
+    return {entry["intent_id"]: entry for entry in data["intents"]}
+
+
+class TestShowCommand:
+    """Tests for ilog show command"""
+
+    def test_show_resolves_hash_printed_by_commit(self, temp_project_dir):
+        """The hash printed by commit is the one log prints and show accepts"""
+        run_ilog("init", "test-project")
+        result = run_ilog("commit", "Chose PostgreSQL for concurrent writes")
+
+        assert result.returncode == 0
+        first_line = result.stdout.splitlines()[0]
+        assert first_line.startswith("[")
+        assert "] main:" in first_line
+        printed_hash = first_line[1:first_line.index("]")]
+        assert len(printed_hash) == 12
+
+        log_result = run_ilog("log")
+        assert f"[{printed_hash}]" in log_result.stdout
+
+        show_result = run_ilog("show", printed_hash)
+        assert show_result.returncode == 0
+        assert f"Intent {printed_hash}" in show_result.stdout
+        assert "PostgreSQL" in show_result.stdout
+
+    def test_show_accepts_chain_hash_prefix(self, temp_project_dir):
+        """A chain hash prefix (what older commit output printed) still resolves"""
+        run_ilog("init", "test-project")
+        run_ilog("commit", "First intent")
+
+        intents_file = temp_project_dir / ".intentlog" / "intents.json"
+        with open(intents_file) as f:
+            entry = json.load(f)["intents"][0]
+
+        result = run_ilog("show", entry["chain_hash"][:12])
+
+        assert result.returncode == 0
+        assert f"ID:        {entry['intent_id']}" in result.stdout
+
+    def test_show_unknown_id_fails(self, temp_project_dir):
+        """Test show with an id that matches nothing"""
+        run_ilog("init", "test-project")
+        run_ilog("commit", "First intent")
+
+        result = run_ilog("show", "ffffffffffff")
+
+        assert result.returncode == 1
+        assert "No intent matching" in result.stdout
+
+
+class TestLinkCommand:
+    """Tests for ilog link command"""
+
+    def test_link_same_branch(self, temp_project_dir):
+        """Linking two intents on the current branch persists the target id"""
+        run_ilog("init", "test-project")
+        run_ilog("commit", "Target intent")
+        target_id = _latest_intent_id()
+        run_ilog("commit", "Source intent")
+        source_id = _latest_intent_id()
+
+        result = run_ilog("link", source_id[:8], target_id[:8])
+
+        assert result.returncode == 0
+        assert "Linked [" in result.stdout
+        assert "Target intent" in result.stdout
+        assert "(on branch" not in result.stdout
+
+        by_id = _read_intents(temp_project_dir / ".intentlog" / "intents.json")
+        assert by_id[source_id]["metadata"]["links"] == [target_id]
+
+    def test_link_target_on_other_branch(self, temp_project_dir):
+        """A link may point at an intent that only exists on another branch"""
+        run_ilog("init", "test-project")
+        run_ilog("commit", "Initial decision")
+        run_ilog("branch", "exploration")
+        run_ilog("commit", "Exploration result")
+        exploration_id = _latest_intent_id("exploration")
+        run_ilog("branch", "main")
+        run_ilog("commit", "Final decision")
+        decision_id = _latest_intent_id("main")
+
+        result = run_ilog("link", decision_id[:8], exploration_id[:8])
+
+        assert result.returncode == 0, result.stdout
+        assert "Error" not in result.stdout
+        assert "Exploration result" in result.stdout
+        assert "(on branch 'exploration')" in result.stdout
+
+        # Persisted on the source (main) branch only
+        main_by_id = _read_intents(temp_project_dir / ".intentlog" / "intents.json")
+        assert main_by_id[decision_id]["metadata"]["links"] == [exploration_id]
+        branch_by_id = _read_intents(
+            temp_project_dir / ".intentlog" / "branches" / "exploration.json"
+        )
+        assert "links" not in branch_by_id[exploration_id]["metadata"]
+
+        show_result = run_ilog("show", decision_id[:8])
+        assert show_result.returncode == 0
+        assert exploration_id[:12] in show_result.stdout
+
+    def test_link_twice_reports_already_linked(self, temp_project_dir):
+        """Linking the same pair twice does not duplicate the link"""
+        run_ilog("init", "test-project")
+        run_ilog("commit", "Target intent")
+        target_id = _latest_intent_id()
+        run_ilog("commit", "Source intent")
+        source_id = _latest_intent_id()
+
+        run_ilog("link", source_id[:8], target_id[:8])
+        result = run_ilog("link", source_id[:8], target_id[:8])
+
+        assert result.returncode == 0
+        assert "Already linked" in result.stdout
+        by_id = _read_intents(temp_project_dir / ".intentlog" / "intents.json")
+        assert by_id[source_id]["metadata"]["links"] == [target_id]
+
+    def test_link_unknown_target_fails(self, temp_project_dir):
+        """Test link fails when the target matches nothing on any branch"""
+        run_ilog("init", "test-project")
+        run_ilog("commit", "Source intent")
+        source_id = _latest_intent_id()
+
+        result = run_ilog("link", source_id[:8], "ffffffffffff")
+
+        assert result.returncode == 1
+        assert "No intent matching 'ffffffffffff'" in result.stdout
+
+    @pytest.mark.parametrize("bad_branch", ["../evil", "bad name"])
+    def test_link_invalid_branch_name_fails_cleanly(self, temp_project_dir, bad_branch):
+        """An invalid --branch name is reported as an error, not a traceback"""
+        run_ilog("init", "test-project")
+        run_ilog("commit", "Source intent")
+        source_id = _latest_intent_id()
+
+        result = run_ilog("link", source_id[:8], source_id[:8], "--branch", bad_branch)
+
+        assert result.returncode == 1
+        assert "Error:" in result.stdout
+        assert "Traceback" not in result.stdout
+        assert "Traceback" not in result.stderr
+
+    def test_link_unknown_branch_fails_cleanly(self, temp_project_dir):
+        """A well-formed but missing --branch is reported as not found"""
+        run_ilog("init", "test-project")
+        run_ilog("commit", "Source intent")
+        source_id = _latest_intent_id()
+
+        result = run_ilog("link", source_id[:8], source_id[:8], "--branch", "nope")
+
+        assert result.returncode == 1
+        assert "Error: Branch 'nope' not found" in result.stdout
+        assert "Traceback" not in result.stderr
+
+
+class TestTagCommand:
+    """Tests for ilog tag command"""
+
+    def test_tag_add_and_remove(self, temp_project_dir):
+        """Tags added by tag persist and can be removed again"""
+        run_ilog("init", "test-project")
+        run_ilog("commit", "Tagged intent")
+        intent_id = _latest_intent_id()
+
+        result = run_ilog("tag", intent_id[:8], "alpha", "beta")
+        assert result.returncode == 0
+        assert "tags: alpha, beta" in result.stdout
+
+        result = run_ilog("tag", intent_id[:8], "alpha", "--remove")
+        assert result.returncode == 0
+        assert "Removed tag: alpha" in result.stdout
+
+        by_id = _read_intents(temp_project_dir / ".intentlog" / "intents.json")
+        assert by_id[intent_id]["metadata"]["tags"] == ["beta"]
+
+    @pytest.mark.parametrize("bad_branch", ["../evil", "bad name"])
+    def test_tag_invalid_branch_name_fails_cleanly(self, temp_project_dir, bad_branch):
+        """An invalid --branch name is reported as an error, not a traceback"""
+        run_ilog("init", "test-project")
+        run_ilog("commit", "Tagged intent")
+        intent_id = _latest_intent_id()
+
+        result = run_ilog("tag", intent_id[:8], "t", "--branch", bad_branch)
+
+        assert result.returncode == 1
+        assert "Error:" in result.stdout
+        assert "Traceback" not in result.stdout
+        assert "Traceback" not in result.stderr
+
+        # Nothing was written
+        by_id = _read_intents(temp_project_dir / ".intentlog" / "intents.json")
+        assert "tags" not in by_id[intent_id]["metadata"]
+
+    def test_tag_unknown_branch_fails_cleanly(self, temp_project_dir):
+        """A well-formed but missing --branch is reported as not found"""
+        run_ilog("init", "test-project")
+        run_ilog("commit", "Tagged intent")
+        intent_id = _latest_intent_id()
+
+        result = run_ilog("tag", intent_id[:8], "t", "--branch", "nope")
+
+        assert result.returncode == 1
+        assert "Error: Branch 'nope' not found" in result.stdout
+        assert "Traceback" not in result.stderr
+
+
+# =========================================================================
+# Chain data and signatures survive tag, link and merge
+# =========================================================================
+
+
+def _branch_entries(path):
+    with open(path) as f:
+        return json.load(f)["intents"]
+
+
+class TestChainPreservedByCommands:
+    """tag, link and merge keep the stored chain of untouched intents"""
+
+    def test_tag_keeps_earlier_chain_entries(self, temp_project_dir):
+        run_ilog("init", "test-project")
+        for message in ("first", "second", "third"):
+            run_ilog("commit", message)
+        intents_file = temp_project_dir / ".intentlog" / "intents.json"
+        before = _branch_entries(intents_file)
+
+        result = run_ilog("tag", before[2]["intent_id"][:8], "x")
+        assert result.returncode == 0, result.stdout
+
+        after = _branch_entries(intents_file)
+        assert after[:2] == before[:2]
+        assert after[2]["prev_hash"] == before[1]["chain_hash"]
+        verify = run_ilog("chain", "verify")
+        assert verify.returncode == 0 and "PASSED" in verify.stdout
+
+    def test_merge_keeps_target_chain(self, temp_project_dir):
+        run_ilog("init", "test-project")
+        run_ilog("commit", "on main")
+        run_ilog("branch", "feat")
+        run_ilog("commit", "on feat")
+        run_ilog("branch", "main")
+        intents_file = temp_project_dir / ".intentlog" / "intents.json"
+        before = _branch_entries(intents_file)
+
+        result = run_ilog("merge", "feat")
+        assert result.returncode == 0, result.stdout
+
+        after = _branch_entries(intents_file)
+        assert after[0] == before[0]
+        assert len(after) == 2 and all("chain_hash" in e for e in after)
+        verify = run_ilog("chain", "verify")
+        assert verify.returncode == 0 and "PASSED" in verify.stdout
+
+
+@pytest.mark.skipif(not CRYPTO_AVAILABLE, reason="cryptography not installed")
+class TestSignedAnnotations:
+    """tag and link refuse to remove signatures unless --force is given"""
+
+    def _signed_project(self, messages):
+        run_ilog("init", "test-project")
+        result = run_ilog("keys", "generate", "--name", "k")
+        assert result.returncode == 0, result.stdout + result.stderr
+        for message in messages:
+            result = run_ilog("commit", "--sign", message)
+            assert result.returncode == 0, result.stdout + result.stderr
+
+    def test_tag_without_force_is_refused(self, temp_project_dir):
+        self._signed_project(["signed"])
+        intents_file = temp_project_dir / ".intentlog" / "intents.json"
+        before = _branch_entries(intents_file)
+
+        result = run_ilog("tag", before[0]["intent_id"][:8], "x")
+
+        assert result.returncode == 1
+        assert "--force" in result.stdout
+        assert "Added tag" not in result.stdout
+        assert "Traceback" not in result.stdout + result.stderr
+        assert _branch_entries(intents_file) == before
+
+    def test_tag_with_force_removes_signature(self, temp_project_dir):
+        self._signed_project(["signed"])
+        intents_file = temp_project_dir / ".intentlog" / "intents.json"
+        intent_id = _branch_entries(intents_file)[0]["intent_id"]
+
+        result = run_ilog("tag", intent_id[:8], "x", "--force")
+
+        assert result.returncode == 0, result.stdout
+        assert "removed 1 signature" in result.stdout
+        entry = _branch_entries(intents_file)[0]
+        assert entry["metadata"]["tags"] == ["x"]
+        assert "signature" not in entry
+        verify = run_ilog("chain", "verify")
+        assert verify.returncode == 0 and "PASSED" in verify.stdout
+
+    def test_link_without_force_is_refused(self, temp_project_dir):
+        self._signed_project(["older", "newer"])
+        intents_file = temp_project_dir / ".intentlog" / "intents.json"
+        before = _branch_entries(intents_file)
+
+        result = run_ilog("link", before[1]["intent_id"][:8], before[0]["intent_id"][:8])
+
+        assert result.returncode == 1
+        assert "--force" in result.stdout
+        assert _branch_entries(intents_file) == before
+
+    def test_branch_keeps_signatures(self, temp_project_dir):
+        self._signed_project(["signed"])
+
+        run_ilog("branch", "feat")
+
+        feat = _branch_entries(temp_project_dir / ".intentlog" / "branches" / "feat.json")
+        assert feat[0].get("signature")
+
+
+def _damage_last_entry(intents_file):
+    """Remove the chain data from the newest stored entry, as a hand edit would."""
+    with open(intents_file) as f:
+        data = json.load(f)
+    for key in ("intent_hash", "prev_hash", "chain_hash", "sequence"):
+        data["intents"][-1].pop(key, None)
+    with open(intents_file, "w") as f:
+        json.dump(data, f, indent=2)
+
+
+class TestDamagedChainCommands:
+    """Commands that would rewrite a damaged chain refuse unless --force"""
+
+    def test_merge_into_damaged_branch_needs_force(self, temp_project_dir):
+        run_ilog("init", "test-project")
+        run_ilog("commit", "first")
+        run_ilog("commit", "second")
+        run_ilog("branch", "feat")
+        run_ilog("commit", "on feat")
+        run_ilog("branch", "main")
+        intents_file = temp_project_dir / ".intentlog" / "intents.json"
+        _damage_last_entry(intents_file)
+        before = _branch_entries(intents_file)
+
+        result = run_ilog("merge", "feat")
+        assert result.returncode == 1
+        assert "--force" in result.stdout
+        assert "Traceback" not in result.stdout + result.stderr
+        assert _branch_entries(intents_file) == before
+
+        result = run_ilog("merge", "feat", "--force")
+        assert result.returncode == 0, result.stdout
+
+    def test_malformed_merge_source_is_reported_not_crashed(self, temp_project_dir):
+        run_ilog("init", "test-project")
+        run_ilog("commit", "first")
+        source = temp_project_dir / ".intentlog" / "branches" / "feat.json"
+        content = '{"branch": "feat", "chain_version": "1.0", "intents": {"0": {}}}'
+        source.write_text(content)
+
+        for args in (("merge", "feat"), ("merge", "feat", "--force"), ("chain", "verify", "--branch", "feat")):
+            result = run_ilog(*args)
+            assert result.returncode == 1, args
+            assert "not valid branch data" in result.stdout
+            assert "Traceback" not in result.stdout + result.stderr
+        assert source.read_text() == content
+
+    @pytest.mark.parametrize("name", ["intents.json", "config.json"])
+    def test_merge_conflict_markers_are_reported_not_crashed(self, temp_project_dir, name):
+        run_ilog("init", "test-project")
+        run_ilog("commit", "first")
+        path = temp_project_dir / ".intentlog" / name
+        content = "<<<<<<< HEAD\n{}\n=======\n{}\n>>>>>>> other\n"
+        path.write_text(content)
+
+        for args in (("log",), ("commit", "x"), ("chain", "verify"), ("tag", "x", "t")):
+            result = run_ilog(*args)
+            assert result.returncode == 1, args
+            assert f"{name} is not valid JSON" in result.stdout, result.stdout
+            assert "Traceback" not in result.stdout + result.stderr
+        assert path.read_text() == content
+
+    def test_union_merge_of_concurrent_commits_is_refused(self, temp_project_dir):
+        def git(*args):
+            subprocess.run(
+                ["git", "-c", "user.email=a@b", "-c", "user.name=a", *args],
+                cwd=temp_project_dir, capture_output=True, check=True,
+            )
+
+        run_ilog("init", "test-project")
+        git("init", "-q")
+        (temp_project_dir / ".gitattributes").write_text(".intentlog/*.json merge=union\n")
+        run_ilog("commit", "base")
+        git("add", "-A")
+        git("commit", "-qm", "base")
+        git("checkout", "-qb", "other")
+        run_ilog("commit", "theirs")
+        git("commit", "-qam", "theirs")
+        git("checkout", "-q", "-")
+        run_ilog("commit", "ours")
+        git("commit", "-qam", "ours")
+        git("merge", "-q", "--no-edit", "other")
+        path = temp_project_dir / ".intentlog" / "intents.json"
+        merged = path.read_text()
+
+        for args in (("chain", "verify"), ("log",), ("commit", "next")):
+            result = run_ilog(*args)
+            assert result.returncode == 1, args
+            assert "duplicate key" in result.stdout, result.stdout
+        assert path.read_text() == merged
+
+    def test_chain_migrate_on_damaged_branch_needs_force(self, temp_project_dir):
+        run_ilog("init", "test-project")
+        run_ilog("commit", "first")
+        run_ilog("commit", "second")
+        intents_file = temp_project_dir / ".intentlog" / "intents.json"
+        _damage_last_entry(intents_file)
+
+        result = run_ilog("chain", "migrate")
+        assert result.returncode == 1
+        assert "--force" in result.stdout
+        assert run_ilog("chain", "verify").returncode == 1
+
+        result = run_ilog("chain", "migrate", "--force")
+        assert result.returncode == 0, result.stdout
+        assert run_ilog("chain", "verify").returncode == 0
+
+
+class TestRepairAllUnreadable:
+    def test_migrate_force_repairs_branch_with_only_unreadable_entries(self, temp_project_dir):
+        run_ilog("init", "test-project")
+        run_ilog("commit", "only entry")
+        intents_file = temp_project_dir / ".intentlog" / "intents.json"
+        with open(intents_file) as f:
+            data = json.load(f)
+        data["intents"][0] = None
+        with open(intents_file, "w") as f:
+            json.dump(data, f)
+
+        assert run_ilog("commit", "refused").returncode == 1
+        assert run_ilog("chain", "migrate").returncode == 1
+
+        result = run_ilog("chain", "migrate", "--force")
+        assert result.returncode == 0, result.stdout
+        assert run_ilog("chain", "verify").returncode == 0
+        assert run_ilog("commit", "works again").returncode == 0
+
+
+class TestUnreadableLegacyCli:
+    def test_migrate_and_tag_keep_unreadable_legacy_entries(self, temp_project_dir):
+        run_ilog("init", "test-project")
+        intents_file = temp_project_dir / ".intentlog" / "intents.json"
+        entries = [
+            {"intent_id": "id-a", "intent_name": "a", "intent_reasoning": "readable",
+             "timestamp": "2024-01-01T10:00:00", "metadata": {}},
+            {"intent_id": "id-b", "intent_name": "b", "intent_reasoning": "no timestamp",
+             "metadata": {}},
+        ]
+        with open(intents_file, "w") as f:
+            json.dump({"branch": "main", "intents": entries}, f)
+        before = intents_file.read_text()
+
+        result = run_ilog("chain", "migrate")
+        assert result.returncode == 1
+        assert "unreadable entry at position 1" in result.stdout
+        assert intents_file.read_text() == before
+
+        result = run_ilog("tag", "id-a", "x")
+        assert result.returncode == 1
+        assert "--force" in result.stdout
+        assert intents_file.read_text() == before
+
+        result = run_ilog("commit", "new work")
+        assert result.returncode == 1
+        assert "migrate --force" in result.stdout
+        assert intents_file.read_text() == before
+
+
+class TestMergeChecksSource:
+    def _project_with_feature(self, temp_project_dir):
+        run_ilog("init", "test-project")
+        run_ilog("commit", "base")
+        run_ilog("branch", "feature")
+        run_ilog("commit", "feat-1 original")
+        run_ilog("branch", "main")
+        return temp_project_dir / ".intentlog"
+
+    def test_tampered_source_is_refused_without_force(self, temp_project_dir):
+        root = self._project_with_feature(temp_project_dir)
+        feature = root / "branches" / "feature.json"
+        data = json.loads(feature.read_text())
+        data["intents"][-1]["intent_reasoning"] = "feat-1 TAMPERED"
+        feature.write_text(json.dumps(data, indent=2))
+        before = (root / "intents.json").read_text()
+
+        result = run_ilog("merge", "feature")
+        assert result.returncode == 1
+        assert "fails chain verification" in result.stdout
+        assert "--branch feature" in result.stdout
+        assert (root / "intents.json").read_text() == before
+
+        assert run_ilog("merge", "feature", "--force").returncode == 0
+
+    def test_unreadable_source_entry_is_refused(self, temp_project_dir):
+        root = self._project_with_feature(temp_project_dir)
+        feature = root / "branches" / "feature.json"
+        data = json.loads(feature.read_text())
+        del data["intents"][-1]["timestamp"]
+        feature.write_text(json.dumps(data, indent=2))
+
+        result = run_ilog("merge", "feature")
+        assert result.returncode == 1
+        assert "Traceback" not in result.stdout + result.stderr
+
+
+class TestHintsNameTheBranch:
+    def test_tag_on_damaged_other_branch_names_it(self, temp_project_dir):
+        run_ilog("init", "test-project")
+        run_ilog("commit", "base")
+        run_ilog("branch", "feature")
+        run_ilog("commit", "f1")
+        run_ilog("branch", "main")
+        feature = temp_project_dir / ".intentlog" / "branches" / "feature.json"
+        data = json.loads(feature.read_text())
+        data["intents"][-1]["intent_reasoning"] = "TAMPERED"
+        feature.write_text(json.dumps(data, indent=2))
+
+        result = run_ilog("tag", data["intents"][-1]["intent_id"][:8], "x", "--branch", "feature")
+
+        assert result.returncode == 1
+        assert "verify --branch feature" in result.stdout
+
+    def test_legacy_unreadable_merge_source_points_to_a_working_repair(self, temp_project_dir):
+        run_ilog("init", "test-project")
+        run_ilog("commit", "base")
+        legacy = temp_project_dir / ".intentlog" / "branches" / "legacy.json"
+        legacy.write_text(json.dumps({"branch": "legacy", "intents": [
+            {"intent_id": "id-a", "intent_name": "a", "intent_reasoning": "ok",
+             "timestamp": "2024-01-01T10:00:00", "metadata": {}},
+            {"intent_id": "id-b", "intent_name": "b", "intent_reasoning": "no timestamp"},
+        ]}))
+
+        result = run_ilog("merge", "legacy")
+        assert result.returncode == 1
+        assert "migrate --force --branch legacy" in result.stdout
+        # The diagnostic agrees with the refusal
+        assert run_ilog("chain", "verify", "--branch", "legacy").returncode == 1
+
+
+class TestTagNoOp:
+    def test_removing_absent_tag_rewrites_nothing(self, temp_project_dir):
+        run_ilog("init", "test-project")
+        run_ilog("commit", "first")
+        run_ilog("commit", "second")
+        intents_file = temp_project_dir / ".intentlog" / "intents.json"
+        before = _branch_entries(intents_file)
+
+        result = run_ilog("tag", before[0]["intent_id"][:8], "nothere", "--remove")
+
+        assert result.returncode == 0, result.stdout
+        assert "Tag not found: nothere" in result.stdout
+        assert _branch_entries(intents_file) == before
+
+    @pytest.mark.skipif(not CRYPTO_AVAILABLE, reason="cryptography not installed")
+    def test_adding_existing_tag_on_signed_chain_needs_no_force(self, temp_project_dir):
+        run_ilog("init", "test-project")
+        run_ilog("keys", "generate", "--name", "k")
+        intents_file = temp_project_dir / ".intentlog" / "intents.json"
+        run_ilog("commit", "--sign", "signed")
+        intent_id = _branch_entries(intents_file)[0]["intent_id"]
+        assert run_ilog("tag", intent_id[:8], "x", "--force").returncode == 0
+        before = _branch_entries(intents_file)
+
+        result = run_ilog("tag", intent_id[:8], "x")
+
+        assert result.returncode == 0, result.stdout
+        assert "Already tagged: x" in result.stdout
+        assert _branch_entries(intents_file) == before
+

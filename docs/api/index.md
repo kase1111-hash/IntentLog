@@ -10,7 +10,7 @@ This section provides detailed API documentation for all IntentLog modules.
 |--------|-------------|
 | [`intentlog.core`](core.md) | Core data models (Intent, IntentLog) |
 | [`intentlog.storage`](storage.md) | Persistent storage with atomic writes and branch management |
-| [`intentlog.git`](#git-integration) | Git detection, context capture, hook management |
+| `intentlog.git` | Git detection, context capture, hook management |
 | [`intentlog.merkle`](storage.md#chainedintent) | Merkle tree chain linking |
 
 ### Cryptographic Modules

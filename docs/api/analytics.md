@@ -42,14 +42,6 @@ Exports intents in various formats.
         - export
         - get_stats
 
-## SufficiencyTest
-
-Tests intent quality against criteria.
-
-::: intentlog.sufficiency.run_sufficiency_test
-    options:
-      show_root_heading: true
-
 ## Usage Examples
 
 ### Analytics Report

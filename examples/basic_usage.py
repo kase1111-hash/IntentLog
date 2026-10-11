@@ -100,36 +100,47 @@ def example_intent_chain():
     print()
 
 
-def example_memory_vault_integration():
-    """Memory Vault integration (optional)"""
-    print("=== Memory Vault Integration ===\n")
+def example_persistent_storage():
+    """Persisting intents to disk and verifying the hash chain"""
+    print("=== Persistent Storage & Chain Verification ===\n")
 
-    from intentlog.integrations import MemoryVaultIntegration
+    import tempfile
+    from pathlib import Path
 
-    integration = MemoryVaultIntegration()
+    from intentlog import IntentLogStorage
 
-    # Classify different types of intents
-    test_cases = [
-        ("store_api_key", "Storing API key for external service"),
-        ("set_team_goal", "Setting quarterly team objectives"),
-        ("record_failed_test", "Recording why test approach failed"),
-        ("daily_task", "Simple daily maintenance task"),
-    ]
+    # Use a throwaway project directory so this runs from any cwd
+    with tempfile.TemporaryDirectory(prefix="intentlog_example_") as tmp:
+        storage = IntentLogStorage(project_path=Path(tmp))
+        storage.init_project("storage_demo")
 
-    for name, reasoning in test_cases:
-        classification = integration.classify_intent(name, reasoning)
-        should_vault = integration.should_use_vault(classification)
-        storage = "Memory Vault" if should_vault else "Local storage"
+        # Each chained intent is linked to the previous one by hash
+        first = storage.add_chained_intent(
+            name="choose_storage_format",
+            reasoning="Using JSON files so the history stays human-readable and diffable",
+        )
+        second = storage.add_chained_intent(
+            name="enable_chain_linking",
+            reasoning="Linking each intent to the previous hash so tampering is detectable",
+            parent_id=first.intent.intent_id,
+        )
+        print(f"Persisted {second.sequence + 1} intents to {storage.intentlog_dir}")
 
-        print(f"Intent: {name}")
-        print(f"  Classification: {classification}")
-        print(f"  Storage: {storage}\n")
+        # Search the stored history
+        results = storage.search_intents("hash")
+        print(f"Found {len(results)} stored intent(s) mentioning 'hash'")
+
+        # Verify the chain that was written to disk
+        verification = storage.verify_chain()
+        status = "valid" if verification.valid else "BROKEN"
+        print(f"Chain {status}: {verification.entries_checked} entries checked")
+        print(f"Root hash: {verification.root_hash[:16]}...\n")
 
 
 if __name__ == "__main__":
     example_basic_logging()
     example_search()
     example_intent_chain()
-    example_memory_vault_integration()
+    example_persistent_storage()
 
     print("✅ All examples completed!")

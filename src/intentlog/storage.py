@@ -11,18 +11,20 @@ Supports:
 - Branch management with chain verification
 """
 
+import hashlib
 import json
 import os
-import hashlib
 import tempfile
-from pathlib import Path
-from datetime import datetime
-from typing import Optional, Dict, Any, List, Tuple, TYPE_CHECKING
+from contextlib import contextmanager
 from dataclasses import dataclass, field
+from datetime import datetime
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Tuple
 
-from .core import Intent, IntentLog
+from .core import Intent
 from .logging import get_logger, log_context
-from .validation import validate_project_name, validate_branch_name, ValidationError
+from .timestamps import parse_iso_datetime
+from .validation import ValidationError, validate_branch_name, validate_project_name
 
 logger = get_logger(__name__)
 
@@ -39,7 +41,7 @@ def _atomic_write_json(path: Path, data: Any, indent: int = 2) -> None:
     parent = path.parent
     fd, tmp_path = tempfile.mkstemp(dir=parent, suffix=".tmp", prefix=".intentlog_")
     try:
-        with os.fdopen(fd, 'w') as f:
+        with os.fdopen(fd, 'w', encoding='utf-8') as f:
             json.dump(data, f, indent=indent)
         os.replace(tmp_path, path)
     except BaseException:
@@ -65,14 +67,14 @@ def _parse_datetime(value: str, field_name: str = "timestamp") -> datetime:
         ValueError: If the datetime string is invalid
     """
     try:
-        return datetime.fromisoformat(value)
+        return parse_iso_datetime(value)
     except (ValueError, TypeError) as e:
         raise ValueError(f"Invalid {field_name} format '{value}': {e}") from e
 
 # Lazy imports to avoid circular dependencies
 if TYPE_CHECKING:
+    from .crypto import KeyManager
     from .merkle import ChainedIntent, ChainVerificationResult
-    from .crypto import KeyManager, Signature
 
 
 INTENTLOG_DIR = ".intentlog"
@@ -177,6 +179,24 @@ class BranchExistsError(StorageError):
     pass
 
 
+class ChainIntegrityError(StorageError):
+    """Raised when a write would rewrite stored chain entries that fail verification"""
+    pass
+
+
+class SignatureLossError(StorageError):
+    """Raised when a write would remove intent signatures and that was not allowed"""
+
+    def __init__(self, branch: str, count: int):
+        self.branch = branch
+        self.count = count
+        super().__init__(
+            f"Saving branch '{branch}' would remove {count} signature(s). Signed "
+            "intents are hashed together with their metadata, so changing an "
+            "intent re-chains it and every intent after it"
+        )
+
+
 def compute_intent_hash(intent: Intent) -> str:
     """
     Compute SHA-256 hash of an intent for integrity verification.
@@ -223,6 +243,204 @@ def find_project_root(start_path: Optional[Path] = None, max_depth: int = 20) ->
     return None
 
 
+def _placeholder_intent(entry: Dict[str, Any]) -> Intent:
+    """Best-effort Intent for a stored entry that cannot be parsed."""
+    try:
+        timestamp = _parse_datetime(entry.get("timestamp"))
+    except ValueError:
+        timestamp = datetime(1970, 1, 1)
+    metadata = entry.get("metadata")
+    parent = entry.get("parent_intent_id")
+    return Intent(
+        intent_id=str(entry.get("intent_id", "")),
+        intent_name=str(entry.get("intent_name", "")),
+        intent_reasoning=str(entry.get("intent_reasoning", "")),
+        timestamp=timestamp,
+        metadata=metadata if isinstance(metadata, dict) else {},
+        parent_intent_id=parent if isinstance(parent, str) else None,
+    )
+
+
+def _readable_as_intent(entry: Any) -> bool:
+    """True if load_intents() can read this stored entry."""
+    if not isinstance(entry, dict):
+        return False
+    try:
+        entry["intent_id"], entry["intent_name"], entry["intent_reasoning"]
+        _parse_datetime(entry["timestamp"])
+        return True
+    except (KeyError, ValueError, TypeError):
+        return False
+
+
+def _first_failing_position(chained: List["ChainedIntent"]) -> Optional[int]:
+    """
+    List index of the first entry that fails verification, or None.
+
+    This is where 'ilog chain migrate --force' starts rebuilding. It is a
+    list position, unlike ChainVerificationResult.broken_at, which is the
+    stored sequence number.
+    """
+    from .merkle import GENESIS_HASH, compute_chain_hash, compute_intent_content_hash
+
+    expected_prev = GENESIS_HASH
+    for i, entry in enumerate(chained):
+        if (
+            not entry.chain_hash
+            or compute_intent_content_hash(entry.intent) != entry.intent_hash
+            or entry.prev_hash != expected_prev
+            or compute_chain_hash(entry.intent_hash, entry.prev_hash) != entry.chain_hash
+        ):
+            return i
+        expected_prev = entry.chain_hash
+    return None
+
+
+# Fields only a hash-chained entry carries ("hash" is in the legacy format too)
+_CHAIN_FIELDS = ("chain_hash", "intent_hash", "prev_hash", "sequence", "signature")
+
+
+def _is_chained_data(data: Dict[str, Any]) -> bool:
+    """
+    True if raw branch data carries hash-chain information.
+
+    Any chain field counts, so a chained branch whose markers were partly
+    removed is still handled as a (damaged) chain, never as legacy data
+    that could be re-chained and stripped of its signatures.
+    """
+    if "chain_version" in data or "root_hash" in data:
+        return True
+    return any(
+        isinstance(entry, dict) and any(key in entry for key in _CHAIN_FIELDS)
+        for entry in data.get("intents", [])
+    )
+
+
+# Entries 'ilog init' makes sure .intentlog/.gitignore has
+_GITIGNORE_ENTRIES = (
+    "*.key",
+    "*.pem",
+    "*.secret",
+    "keys.json",
+    "violations.jsonl",
+    "network_audit.jsonl",
+    "temp/",
+)
+
+_CONFIG_STRING_FIELDS = ("created_at", "current_branch", "version", "git_root")
+
+
+def _git_trim_trailing_spaces(line: bytes) -> bytes:
+    """Remove trailing spaces not escaped with a backslash, as git does."""
+    last_space = None
+    i = 0
+    while i < len(line):
+        char = line[i:i + 1]
+        if char == b" ":
+            if last_space is None:
+                last_space = i
+        else:
+            if char == b"\\":
+                i += 1  # the next byte is escaped
+                if i >= len(line):
+                    return line
+            last_space = None
+        i += 1
+    return line if last_space is None else line[:last_space]
+
+
+def _gitignore_patterns(content: bytes) -> set:
+    """
+    The patterns git reads from .gitignore content: a leading UTF-8 BOM
+    skipped, lines split at LF only, one CR before each LF dropped, and
+    trailing spaces trimmed unless escaped. Any other whitespace (leading,
+    tabs, a second CR) stays part of the pattern.
+    """
+    if content.startswith(b"\xef\xbb\xbf"):
+        content = content[3:]
+    patterns = set()
+    for line in content.split(b"\n"):
+        if line.endswith(b"\r"):
+            line = line[:-1]
+        patterns.add(_git_trim_trailing_spaces(line))
+    return patterns
+
+
+def _config_problem(data: Any) -> Optional[str]:
+    """
+    Describe why parsed config.json data is not a usable configuration, or
+    return None. Field values are never echoed: config.json may come from
+    a shared repository, and its text would reach the terminal.
+    """
+    if not isinstance(data, dict):
+        return "expected a JSON object"
+    if not isinstance(data.get("project_name"), str):
+        return "'project_name' must be a string"
+    for key in _CONFIG_STRING_FIELDS:
+        if key in data and not isinstance(data[key], str):
+            return f"'{key}' must be a string"
+    llm = data.get("llm", {})
+    if not isinstance(llm, dict) or not all(isinstance(v, str) for v in llm.values()):
+        return "'llm' must be an object of strings"
+    current_branch = data.get("current_branch", "main")
+    try:
+        # The validator strips whitespace; a name it changes is not one
+        # branch files are stored under
+        valid = validate_branch_name(current_branch) == current_branch
+    except ValidationError:
+        valid = False
+    if not valid:
+        return "'current_branch' is not a valid branch name"
+    return None
+
+
+_RESTORE_HINT = "Fix the file or restore it from a backup"
+
+
+def _reject_duplicate_keys(pairs: List[Tuple[str, Any]]) -> Dict[str, Any]:
+    """
+    json object hook: refuse an object that repeats a key. json.load()
+    would keep only the last value, hiding the others, which is what
+    keeping both sides of a git merge conflict produces.
+    """
+    result: Dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate key {key!r}, which would hide one of its values")
+        result[key] = value
+    return result
+
+
+def _load_json_file(path: Path, hint: str = _RESTORE_HINT) -> Any:
+    """
+    Parse a UTF-8 JSON file under .intentlog/, reporting a file that cannot
+    be read as written (empty, truncated, merge conflict markers, invalid
+    UTF-8, duplicate keys, nesting too deep) as a StorageError naming it,
+    followed by ``hint``.
+    """
+    try:
+        with open(path, encoding="utf-8") as f:
+            return json.load(f, object_pairs_hook=_reject_duplicate_keys)
+    except (ValueError, RecursionError) as e:
+        raise StorageError(f"{path} is not valid JSON ({e}). {hint}") from e
+
+
+def _validated_branch_data(data: Any, branch_file: Path) -> Dict[str, Any]:
+    """
+    Return a branch file's parsed JSON, refusing anything that is not branch
+    data: a top level other than an object, or no 'intents' list. Such a
+    file cannot be read entry by entry, so it is never treated as empty (a
+    write would then replace it) or partly readable. Every IntentLog version
+    writes the 'intents' key.
+    """
+    if not isinstance(data, dict) or not isinstance(data.get("intents"), list):
+        raise StorageError(
+            f"{branch_file} is not valid branch data (expected a JSON object "
+            f"with an 'intents' list). {_RESTORE_HINT}"
+        )
+    return data
+
+
 class IntentLogStorage:
     """
     Manages persistent storage for IntentLog projects.
@@ -235,6 +453,9 @@ class IntentLogStorage:
             ├── feature-x.json   # Branch-specific intents
             └── experiment.json
     """
+
+    #: Seconds to wait for a branch lock before raising FileLockTimeout.
+    lock_timeout: float = 10.0
 
     def __init__(self, project_path: Optional[Path] = None):
         """
@@ -257,10 +478,38 @@ class IntentLogStorage:
         self.branches_dir = self.intentlog_dir / BRANCHES_DIR
 
     def _get_branch_file(self, branch_name: str) -> Path:
-        """Get the path to a branch's intent file"""
+        """
+        Get the path to a branch's intent file.
+
+        Raises:
+            BranchNotFoundError: If the name is not a valid branch name, so a
+                traversal-style name can never address a file outside
+                .intentlog/
+        """
+        try:
+            validate_branch_name(branch_name)
+        except ValidationError as e:
+            raise BranchNotFoundError(f"Branch '{branch_name}' not found") from e
         if branch_name == "main":
             return self.intentlog_dir / INTENTS_FILE
         return self.branches_dir / f"{branch_name}.json"
+
+    def _get_lock_file(self, file_path: Path) -> Path:
+        """
+        Get the lock file path for a data file under .intentlog/.
+
+        Locks live in .intentlog/temp/locks/, mirroring the data file's path
+        (e.g. temp/locks/branches/feature.json.lock). They are taken on a
+        separate, stable file rather than on the data file itself, because
+        _atomic_write_json() replaces data files with os.replace(), which
+        would leave lock holders attached to an unlinked inode. temp/ is in
+        the .gitignore that 'ilog init' writes, so locks never show up as
+        untracked files.
+        """
+        relative = Path(file_path).relative_to(self.intentlog_dir)
+        if ".." in relative.parts:
+            raise StorageError(f"Refusing to lock a path outside {INTENTLOG_DIR}/: {file_path}")
+        return self.intentlog_dir / "temp" / "locks" / relative.parent / (relative.name + ".lock")
 
     def _lock_file(self, file_path: Path, exclusive: bool = True):
         """
@@ -268,9 +517,52 @@ class IntentLogStorage:
 
         Uses cross-platform file locking to prevent concurrent writes.
         Works on Unix (fcntl), Windows (msvcrt), and falls back to lock files.
+        Locks are re-entrant within a thread (see filelock.FileLock).
         """
         from .filelock import FileLock
-        return FileLock(file_path, exclusive=exclusive)
+        return FileLock(
+            self._get_lock_file(file_path),
+            exclusive=exclusive,
+            timeout=self.lock_timeout,
+        )
+
+    @contextmanager
+    def lock_branch(self, branch: Optional[str] = None) -> Iterator[str]:
+        """
+        Hold an exclusive lock on a branch for a read-modify-write sequence.
+
+        Use this around any load -> mutate -> save sequence so that no other
+        thread or process can interleave its own write and cause a lost
+        update. The lock is re-entrant within the current thread, so
+        load_intents(), save_intents(), add_intent() and the chained
+        variants can be called freely inside the block without deadlocking.
+
+        Args:
+            branch: Branch to lock. If None, uses current branch.
+
+        Yields:
+            The name of the locked branch (resolved from config when None).
+
+        Raises:
+            ProjectNotFoundError: If project not initialized
+            ValidationError: If the branch name is invalid
+            FileLockTimeout: If the lock cannot be acquired within lock_timeout
+
+        Usage:
+            with storage.lock_branch() as branch:
+                intents = storage.load_intents(branch)
+                intents.append(new_intent)
+                storage.save_intents(intents, branch, strict=True)
+        """
+        # Resolve and validate BEFORE locking: acquiring the lock creates the
+        # lock file (and its parent directories), so an uninitialized project
+        # must raise first, or a stray .intentlog/ would shadow the real
+        # project root; likewise a traversal-style name, whether passed in or
+        # read from config.json, must never reach _get_branch_file().
+        config = self.load_config()
+        branch = validate_branch_name(branch or config.current_branch)
+        with self._lock_file(self._get_branch_file(branch), exclusive=True):
+            yield branch
 
     def is_initialized(self) -> bool:
         """Check if project is initialized"""
@@ -289,7 +581,8 @@ class IntentLogStorage:
 
         Args:
             project_name: Name for the project
-            force: If True, reinitialize existing project
+            force: If True, reinitialize existing project, resetting the
+                main branch. Without it, intents already on disk are kept.
 
         Returns:
             ProjectConfig for the new project
@@ -320,21 +613,28 @@ class IntentLogStorage:
         config = ProjectConfig(project_name=project_name)
         _atomic_write_json(self.config_path, config.to_dict())
 
-        # Create empty main branch intents
+        # Create empty main branch intents. Without force, intents already on
+        # disk (for example after config.json went missing) are kept.
         main_intents_path = self._get_branch_file("main")
-        _atomic_write_json(main_intents_path, {"intents": [], "branch": "main"})
+        if force or not main_intents_path.exists():
+            _atomic_write_json(main_intents_path, {"intents": [], "branch": "main"})
+        else:
+            logger.info("Keeping existing intents", path=str(main_intents_path))
 
-        # Create .gitignore for sensitive data
+        # Create .gitignore for sensitive data. An existing one keeps its
+        # entries (users and key generation add their own) and only gets the
+        # default entries it lacks.
         gitignore_path = self.intentlog_dir / ".gitignore"
-        with open(gitignore_path, 'w') as f:
-            f.write("# IntentLog sensitive data — never commit!\n")
-            f.write("*.key\n")
-            f.write("*.pem\n")
-            f.write("*.secret\n")
-            f.write("keys.json\n")
-            f.write("violations.jsonl\n")
-            f.write("network_audit.jsonl\n")
-            f.write("temp/\n")
+        current = gitignore_path.read_bytes() if gitignore_path.is_file() else b""
+        present = _gitignore_patterns(current)
+        missing = [entry for entry in _GITIGNORE_ENTRIES if entry.encode() not in present]
+        if not current:
+            lines = ["# IntentLog sensitive data - never commit!"] + missing
+        else:
+            lines = ([""] if not current.endswith(b"\n") else []) + missing
+        if missing:
+            with open(gitignore_path, "a", encoding="utf-8") as f:
+                f.write("\n".join(lines) + "\n")
 
         logger.info("Project initialized successfully", project=project_name)
         return config
@@ -348,15 +648,22 @@ class IntentLogStorage:
 
         Raises:
             ProjectNotFoundError: If project not initialized
+            StorageError: If config.json is not a JSON object
         """
         if not self.is_initialized():
             raise ProjectNotFoundError(
-                f"No IntentLog project found. Run 'ilog init' first."
+                "No IntentLog project found. Run 'ilog init' first."
             )
 
-        with open(self.config_path, 'r') as f:
-            data = json.load(f)
-
+        hint = (
+            "Fix the file, or delete it and run 'ilog init <project-name>' to "
+            "recreate it (intents are kept; settings such as the current branch "
+            "are reset)"
+        )
+        data = _load_json_file(self.config_path, hint)
+        problem = _config_problem(data)
+        if problem:
+            raise StorageError(f"{self.config_path} is not a valid configuration ({problem}). {hint}")
         return ProjectConfig.from_dict(data)
 
     def save_config(self, config: ProjectConfig) -> None:
@@ -386,9 +693,7 @@ class IntentLogStorage:
                 return []
             raise BranchNotFoundError(f"Branch '{branch}' not found")
 
-        with self._lock_file(branch_file, exclusive=False):
-            with open(branch_file, 'r') as f:
-                data = json.load(f)
+        data = self._read_branch_data(branch_file)
 
         intents = []
         for intent_data in data.get("intents", []):
@@ -402,43 +707,222 @@ class IntentLogStorage:
                     parent_intent_id=intent_data.get("parent_intent_id"),
                 )
                 intents.append(intent)
-            except (KeyError, ValueError) as e:
+            except (KeyError, ValueError, TypeError) as e:
                 logger.warning(f"Skipping invalid intent data: {e}")
                 continue
 
         return intents
 
-    def save_intents(self, intents: List[Intent], branch: Optional[str] = None) -> None:
+    def save_intents(
+        self,
+        intents: List[Intent],
+        branch: Optional[str] = None,
+        *,
+        strict: bool = True,
+    ) -> int:
         """
         Save intents to a branch.
+
+        On a hash-chained branch the stored chain is preserved: every stored
+        entry up to the first intent that was changed, inserted or removed is
+        kept verbatim, hashes and signature included, and only the intents
+        from that point on are re-chained. Appending intents therefore never
+        rewrites history. Changing an earlier intent (for example tagging it,
+        since tags live in the hashed metadata) re-chains that intent and every
+        later one, which invalidates their signatures, so those signatures are
+        removed. Branches without chain data keep the plain format.
 
         Args:
             intents: List of Intent objects to save
             branch: Branch name. If None, uses current branch.
+            strict: If True (the default), refuse a rewrite that would remove
+                signatures, overwrite stored entries that fail chain
+                verification, or drop entries that cannot be read. If False,
+                proceed and log a warning.
+
+        Returns:
+            Number of signatures removed because their intents were re-chained.
+
+        Raises:
+            SignatureLossError: If strict and signatures would be removed
+            ChainIntegrityError: If strict and the part of the stored chain
+                being rewritten fails verification
         """
         config = self.load_config()
         branch = branch or config.current_branch
 
         branch_file = self._get_branch_file(branch)
 
-        data = {
-            "branch": branch,
-            "intents": [
-                {
-                    "intent_id": i.intent_id,
-                    "intent_name": i.intent_name,
-                    "intent_reasoning": i.intent_reasoning,
-                    "timestamp": i.timestamp.isoformat() if isinstance(i.timestamp, datetime) else i.timestamp,
-                    "metadata": i.metadata,
-                    "parent_intent_id": i.parent_intent_id,
-                    "hash": compute_intent_hash(i),
-                }
-                for i in intents
-            ],
-        }
-
         with self._lock_file(branch_file, exclusive=True):
+            existing = self._read_branch_data(branch_file)
+
+            if _is_chained_data(existing):
+                chained, removed = self._rechain_preserving(
+                    branch, existing, intents, strict=strict
+                )
+                self.save_chained_intents(chained, branch)
+                return removed
+
+            unreadable = [
+                i for i, entry in enumerate(existing.get("intents", []))
+                if not _readable_as_intent(entry)
+            ]
+            if unreadable:
+                message = (
+                    f"Branch '{branch}' has an unreadable entry at position {unreadable[0]}; "
+                    "saving would drop it. Fix the entry, or run "
+                    f"'ilog chain migrate --force --branch {branch}' to drop it"
+                )
+                if strict:
+                    raise ChainIntegrityError(message)
+                get_logger().warning(message)
+
+            data = {
+                "branch": branch,
+                "intents": [
+                    {
+                        "intent_id": i.intent_id,
+                        "intent_name": i.intent_name,
+                        "intent_reasoning": i.intent_reasoning,
+                        "timestamp": i.timestamp.isoformat() if isinstance(i.timestamp, datetime) else i.timestamp,
+                        "metadata": i.metadata,
+                        "parent_intent_id": i.parent_intent_id,
+                        "hash": compute_intent_hash(i),
+                    }
+                    for i in intents
+                ],
+            }
             _atomic_write_json(branch_file, data)
+            return 0
+
+    def _read_branch_data(self, branch_file: Path) -> Dict[str, Any]:
+        """Read a branch file's raw JSON under a shared lock ({} if it does not exist)."""
+        if not branch_file.is_file():
+            return {}
+        with self._lock_file(branch_file, exclusive=False):
+            data = _load_json_file(branch_file)
+        return _validated_branch_data(data, branch_file)
+
+    def _rechain_preserving(
+        self,
+        branch: str,
+        existing: Dict[str, Any],
+        intents: List[Intent],
+        strict: bool = False,
+        repair: bool = False,
+    ) -> Tuple[List["ChainedIntent"], int]:
+        """
+        Build the chain for ``intents`` while keeping the stored chain intact.
+
+        Stored entries are kept verbatim for as long as the intents match them
+        (same position, same intent_id, same content). From the first mismatch
+        on, intents are re-chained. Stored entries are kept even if they fail
+        verification, so a write never hides tampering; a rewrite that would
+        replace such entries is reported instead.
+
+        With ``repair``, stored entries are only kept up to the first one that
+        fails verification; the chain is rebuilt from there.
+
+        Returns:
+            (chain, number of signatures removed by the rewrite)
+        """
+        from .merkle import (
+            GENESIS_HASH,
+            ChainedIntent,
+            append_to_chain,
+            compute_chain_hash,
+            compute_intent_content_hash,
+        )
+
+        logger = get_logger()
+        raw_entries = list(existing.get("intents", []))
+
+        # Parse the stored chain up to the first entry that is not a valid
+        # chained entry; positions then line up with raw_entries.
+        stored: List[ChainedIntent] = []
+        for entry in raw_entries:
+            if not isinstance(entry, dict) or "chain_hash" not in entry:
+                break
+            try:
+                stored.append(ChainedIntent.from_dict(entry))
+            except (KeyError, ValueError, TypeError):
+                break
+
+        def entry_verifies(i: int) -> bool:
+            cur = stored[i]
+            expected_prev = stored[i - 1].chain_hash if i > 0 else GENESIS_HASH
+            return (
+                bool(cur.chain_hash)
+                and compute_intent_content_hash(cur.intent) == cur.intent_hash
+                and cur.prev_hash == expected_prev
+                and compute_chain_hash(cur.intent_hash, cur.prev_hash) == cur.chain_hash
+            )
+
+        keep = 0
+        while (
+            keep < len(intents)
+            and keep < len(stored)
+            and stored[keep].intent.intent_id == intents[keep].intent_id
+            and compute_intent_content_hash(stored[keep].intent)
+            == compute_intent_content_hash(intents[keep])
+            and (not repair or entry_verifies(keep))
+        ):
+            keep += 1
+
+        # Stored entries from `keep` on are about to be replaced.
+        branch_is_chained = _is_chained_data(existing)
+        broken_at = None
+        message = ""
+        for i in range(keep, len(raw_entries)):
+            raw = raw_entries[i]
+            if not isinstance(raw, dict) or "chain_hash" not in raw:
+                if branch_is_chained:
+                    # On a chained branch every entry must carry chain data;
+                    # a missing one means it was stripped by hand.
+                    broken_at = i
+                    message = (
+                        f"Branch '{branch}' fails chain verification at position {i}; "
+                        "rewriting it would hide the break. Run "
+                        f"'ilog chain verify --branch {branch}' for details"
+                    )
+                    break
+                if not _readable_as_intent(raw):
+                    # Legacy plain branch: an entry that cannot be read would
+                    # be dropped by the rewrite
+                    broken_at = i
+                    message = (
+                        f"Branch '{branch}' has an unreadable entry at position {i}; "
+                        "rewriting the branch would drop it. Fix the entry, or run "
+                        f"'ilog chain migrate --force --branch {branch}' to drop it"
+                    )
+                    break
+                continue
+            if i >= len(stored) or not entry_verifies(i):
+                broken_at = i
+                message = (
+                    f"Branch '{branch}' fails chain verification at position {i}; "
+                    "rewriting it would hide the break. Run "
+                    f"'ilog chain verify --branch {branch}' for details"
+                )
+                break
+
+        if broken_at is not None:
+            if strict:
+                raise ChainIntegrityError(message)
+            logger.warning(message)
+
+        removed = sum(1 for e in raw_entries[keep:] if isinstance(e, dict) and e.get("signature"))
+        if removed:
+            if strict:
+                raise SignatureLossError(branch, removed)
+            logger.warning(
+                "Removed signatures invalidated by re-chaining", branch=branch, count=removed
+            )
+
+        chained = list(stored[:keep])
+        for intent in intents[keep:]:
+            chained.append(append_to_chain(chained, intent))
+        return chained, removed
 
     def add_intent(
         self,
@@ -447,9 +931,14 @@ class IntentLogStorage:
         metadata: Optional[Dict[str, Any]] = None,
         parent_id: Optional[str] = None,
         branch: Optional[str] = None,
+        force: bool = False,
     ) -> Intent:
         """
         Add a new intent to the log.
+
+        Appending to an intact chain never rewrites it. If the branch's
+        stored chain is damaged, appending would rewrite the damaged part, so
+        it is refused unless forced.
 
         Args:
             name: Intent name/title
@@ -457,9 +946,15 @@ class IntentLogStorage:
             metadata: Optional metadata dict
             parent_id: Optional parent intent ID
             branch: Branch to add to. If None, uses current branch.
+            force: Rewrite a damaged stored chain anyway (removing signatures
+                on the rewritten entries)
 
         Returns:
             The created Intent with computed hash
+
+        Raises:
+            ChainIntegrityError: If not forced and the stored chain is damaged
+            SignatureLossError: If not forced and signatures would be removed
         """
         logger = get_logger()
 
@@ -475,9 +970,12 @@ class IntentLogStorage:
             raise ValueError("Intent must have name and non-empty reasoning")
 
         with log_context(intent_id=intent.intent_id, branch=branch, operation="add_intent"):
-            intents = self.load_intents(branch)
-            intents.append(intent)
-            self.save_intents(intents, branch)
+            # Hold one exclusive lock across load + append + save so that
+            # concurrent writers cannot both read N intents and write N+1.
+            with self.lock_branch(branch) as locked_branch:
+                intents = self.load_intents(locked_branch)
+                intents.append(intent)
+                self.save_intents(intents, locked_branch, strict=not force)
             logger.info("Added intent", name=name[:50], intent_id=intent.intent_id[:12])
 
         return intent
@@ -503,35 +1001,35 @@ class IntentLogStorage:
         from_branch = from_branch or config.current_branch
 
         new_branch_file = self._get_branch_file(branch_name)
-        if new_branch_file.is_file():
-            logger.debug("Branch already exists", branch=branch_name)
-            raise BranchExistsError(f"Branch '{branch_name}' already exists")
 
-        logger.info("Creating branch", branch=branch_name, from_branch=from_branch)
+        # Lock the new branch so the exists-check and the create are atomic
+        # with respect to concurrent create_branch/add_intent on that name.
+        with self.lock_branch(branch_name):
+            if new_branch_file.is_file():
+                logger.debug("Branch already exists", branch=branch_name)
+                raise BranchExistsError(f"Branch '{branch_name}' already exists")
 
-        # Copy intents from source branch
-        intents = self.load_intents(from_branch)
+            logger.info("Creating branch", branch=branch_name, from_branch=from_branch)
 
-        # Create new branch file
-        data = {
-            "branch": branch_name,
-            "created_from": from_branch,
-            "created_at": datetime.now().isoformat(),
-            "intents": [
-                {
-                    "intent_id": i.intent_id,
-                    "intent_name": i.intent_name,
-                    "intent_reasoning": i.intent_reasoning,
-                    "timestamp": i.timestamp.isoformat() if isinstance(i.timestamp, datetime) else i.timestamp,
-                    "metadata": i.metadata,
-                    "parent_intent_id": i.parent_intent_id,
-                    "hash": compute_intent_hash(i),
-                }
-                for i in intents
-            ],
-        }
+            # Copy intents from source branch (raises if it does not exist)
+            intents = self.load_intents(from_branch)
 
-        _atomic_write_json(new_branch_file, data)
+            data: Dict[str, Any] = {
+                "branch": branch_name,
+                "created_from": from_branch,
+                "created_at": datetime.now().isoformat(),
+            }
+
+            # The new branch starts as an exact copy of the stored source:
+            # chain links, signatures and any damage or unreadable entries
+            # included, so nothing is silently left behind
+            source = self._read_branch_data(self._get_branch_file(from_branch))
+            for key in ("chain_version", "root_hash"):
+                if key in source:
+                    data[key] = source[key]
+            data["intents"] = list(source.get("intents", []))
+
+            _atomic_write_json(new_branch_file, data)
 
         logger.info("Branch created", branch=branch_name, intents_copied=len(intents))
 
@@ -663,15 +1161,14 @@ class IntentLogStorage:
                 return []
             raise BranchNotFoundError(f"Branch '{branch}' not found")
 
-        with self._lock_file(branch_file, exclusive=False):
-            with open(branch_file, 'r') as f:
-                data = json.load(f)
+        data = self._read_branch_data(branch_file)
 
+        branch_is_chained = _is_chained_data(data)
         chained = []
         for intent_data in data.get("intents", []):
             try:
                 # Check if chain data exists
-                if "chain_hash" in intent_data:
+                if isinstance(intent_data, dict) and "chain_hash" in intent_data:
                     # Load with existing chain data
                     chained.append(ChainedIntent.from_dict(intent_data))
                 else:
@@ -685,14 +1182,38 @@ class IntentLogStorage:
                         parent_intent_id=intent_data.get("parent_intent_id"),
                     )
                     chained.append(intent)
-            except (KeyError, ValueError) as e:
+            except (KeyError, ValueError, TypeError) as e:
+                if branch_is_chained:
+                    # On a chained branch an entry that cannot be read is
+                    # damage, not noise: keep it as a broken entry so
+                    # verification reports it and no later write drops it
+                    logger.warning(f"Unreadable chained intent data: {e}")
+                    chained.append(ChainedIntent(
+                        intent=_placeholder_intent(
+                            intent_data if isinstance(intent_data, dict) else {}
+                        ),
+                        intent_hash="",
+                        prev_hash="",
+                        chain_hash="",
+                        sequence=len(chained),
+                    ))
+                    continue
                 logger.warning(f"Skipping invalid chained intent data: {e}")
                 continue
 
-        # If any items are plain Intent, rebuild the chain
-        if chained and isinstance(chained[0], Intent):
-            plain_intents = [c if isinstance(c, Intent) else c.intent for c in chained]
-            chained = chain_intents(plain_intents)
+        if any(isinstance(c, Intent) for c in chained):
+            if not _is_chained_data(data):
+                # Legacy branch recorded without chain data: build the chain
+                chained = chain_intents(chained)
+            else:
+                # A chained branch with entries whose chain data was removed.
+                # Keep them in place with empty hashes so verification reports
+                # the break, wherever it is, instead of re-hashing it away.
+                chained = [
+                    c if not isinstance(c, Intent)
+                    else ChainedIntent(intent=c, intent_hash="", prev_hash="", chain_hash="", sequence=i)
+                    for i, c in enumerate(chained)
+                ]
 
         return chained
 
@@ -762,19 +1283,48 @@ class IntentLogStorage:
         if not intent.validate():
             raise ValueError("Intent must have name and non-empty reasoning")
 
-        # Load existing chain
-        chained_intents = self.load_chained_intents(branch)
+        # Hold one exclusive lock across load + append + save so that
+        # concurrent writers cannot build two chains from the same prev_hash.
+        with self.lock_branch(branch) as locked_branch:
+            # A legacy branch is chained on its first chained commit; that
+            # rewrite must not drop entries that cannot be read
+            existing = self._read_branch_data(self._get_branch_file(locked_branch))
+            if not _is_chained_data(existing):
+                unreadable = [
+                    i for i, entry in enumerate(existing.get("intents", []))
+                    if not _readable_as_intent(entry)
+                ]
+                if unreadable:
+                    raise ChainIntegrityError(
+                        f"Branch '{locked_branch}' has an unreadable entry at position "
+                        f"{unreadable[0]}; committing would drop it. Fix the entry, or run "
+                        f"'ilog chain migrate --force --branch {locked_branch}' to drop it explicitly"
+                    )
 
-        # Append to chain
-        new_chained = append_to_chain(chained_intents, intent)
+            # Load existing chain
+            chained_intents = self.load_chained_intents(locked_branch)
+            damaged = [i for i, c in enumerate(chained_intents) if not c.chain_hash]
+            if damaged:
+                first_break = _first_failing_position(chained_intents)
+                raise ChainIntegrityError(
+                    f"Branch '{locked_branch}' has entries without chain data or that "
+                    f"cannot be read (position {damaged[0]}). Run 'ilog chain verify "
+                    f"--branch {locked_branch}' for details; 'ilog chain migrate --force "
+                    f"--branch {locked_branch}' rebuilds the chain from position "
+                    f"{first_break}, dropping entries that cannot be read and removing "
+                    "the signatures from there on"
+                )
 
-        # Sign if requested
-        if sign:
-            signature = self._sign_chained_intent(new_chained, key_password)
-            new_chained.signature = signature
+            # Append to chain
+            new_chained = append_to_chain(chained_intents, intent)
 
-        chained_intents.append(new_chained)
-        self.save_chained_intents(chained_intents, branch)
+            # Sign if requested
+            if sign:
+                signature = self._sign_chained_intent(new_chained, key_password)
+                new_chained.signature = signature
+
+            chained_intents.append(new_chained)
+            self.save_chained_intents(chained_intents, locked_branch)
 
         return new_chained
 
@@ -817,8 +1367,66 @@ class IntentLogStorage:
         """
         from .merkle import verify_chain
 
+        branch = branch or self.load_config().current_branch
         chained = self.load_chained_intents(branch)
-        return verify_chain(chained)
+        result = verify_chain(chained)
+
+        # A legacy branch is chained from its readable entries only; an entry
+        # that cannot be read cannot be verified either
+        data = self._read_branch_data(self._get_branch_file(branch))
+        if not _is_chained_data(data):
+            for i, entry in enumerate(data.get("intents", [])):
+                if not _readable_as_intent(entry):
+                    result.valid = False
+                    result.errors.append(f"Unreadable entry at position {i} cannot be verified")
+                    if result.broken_at is None:
+                        result.broken_at = i
+        return result
+
+    def check_branch_integrity(self, branch: Optional[str] = None) -> Optional[str]:
+        """
+        Describe the first problem with a branch's stored data, if any.
+
+        Reports a chain that fails verification on a chained branch, or an
+        entry that cannot be read on any branch.
+
+        Args:
+            branch: Branch to check. If None, uses current branch.
+
+        Returns:
+            A description of the problem, or None if the branch is sound
+        """
+        branch = branch or self.load_config().current_branch
+        data = self._read_branch_data(self._get_branch_file(branch))
+        if not data and branch != "main":
+            raise BranchNotFoundError(f"Branch '{branch}' not found")
+        if _is_chained_data(data):
+            # Unreadable entries are broken placeholders here, at their own
+            # position, so the first failing position covers every problem
+            position = _first_failing_position(self.load_chained_intents(branch))
+            if position is None:
+                return None
+            raw_entries = data.get("intents", [])
+            if position < len(raw_entries) and not _readable_as_intent(raw_entries[position]):
+                return (
+                    f"Branch '{branch}' has an unreadable entry at position {position}. "
+                    f"Fix the entry, or run 'ilog chain migrate --force --branch {branch}' "
+                    "to drop it and rebuild the chain from there, removing the signatures "
+                    "from that point on"
+                )
+            return (
+                f"Branch '{branch}' fails chain verification at position {position}. Run "
+                f"'ilog chain verify --branch {branch}' for details; 'ilog chain migrate "
+                f"--force --branch {branch}' would rebuild the chain from there and remove "
+                "the signatures from that point on"
+            )
+        for i, entry in enumerate(data.get("intents", [])):
+            if not _readable_as_intent(entry):
+                return (
+                    f"Branch '{branch}' has an unreadable entry at position {i}. Fix the "
+                    f"entry, or run 'ilog chain migrate --force --branch {branch}' to drop it"
+                )
+        return None
 
     def get_root_hash(self, branch: Optional[str] = None) -> str:
         """
@@ -830,7 +1438,7 @@ class IntentLogStorage:
         Returns:
             Root hash string
         """
-        from .merkle import compute_root_hash, GENESIS_HASH
+        from .merkle import GENESIS_HASH, compute_root_hash
 
         chained = self.load_chained_intents(branch)
         if not chained:
@@ -857,28 +1465,44 @@ class IntentLogStorage:
         chained = self.load_chained_intents(branch)
         return generate_inclusion_proof(chained, sequence)
 
-    def migrate_to_chain(self, branch: Optional[str] = None) -> int:
+    def migrate_to_chain(self, branch: Optional[str] = None, force: bool = False) -> int:
         """
         Migrate legacy intents to chain format.
 
+        Chain data already stored is kept as it is. If part of the stored
+        chain would have to be rewritten because it is unreadable or was
+        stripped, or a legacy entry cannot be read and would be dropped, the
+        migration is refused unless forced, because the rewrite would hide
+        that damage or lose that entry.
+
         Args:
             branch: Branch to migrate. If None, uses current branch.
+            force: Rewrite damaged chain data anyway (removing any signatures
+                on the rewritten entries).
 
         Returns:
             Number of intents migrated
+
+        Raises:
+            ChainIntegrityError: If not forced and damaged chain data would be
+                rewritten
+            SignatureLossError: If not forced and signatures would be removed
         """
-        from .merkle import chain_intents
+        with self.lock_branch(branch) as locked_branch:
+            intents = self.load_intents(locked_branch)
+            existing = self._read_branch_data(self._get_branch_file(locked_branch))
+            # Nothing to do only if nothing is stored: a branch whose entries
+            # are all unreadable still needs repairing
+            if not existing.get("intents"):
+                return 0
 
-        # Load plain intents
-        intents = self.load_intents(branch)
-        if not intents:
-            return 0
+            # Chain them, keeping any chain data (and signatures) already stored
+            chained, _ = self._rechain_preserving(
+                locked_branch, existing, intents, strict=not force, repair=force
+            )
 
-        # Chain them
-        chained = chain_intents(intents)
-
-        # Save with chain data
-        self.save_chained_intents(chained, branch)
+            # Save with chain data
+            self.save_chained_intents(chained, locked_branch)
 
         return len(chained)
 

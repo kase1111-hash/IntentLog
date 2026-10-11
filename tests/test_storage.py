@@ -2,27 +2,35 @@
 Tests for IntentLog storage module
 """
 
-import os
 import json
-import tempfile
+import os
 import shutil
-from pathlib import Path
+import sys
+import tempfile
+import threading
 from datetime import datetime
+from pathlib import Path
 
 import pytest
 
+from intentlog import CRYPTO_AVAILABLE
+from intentlog.core import Intent
+from intentlog.filelock import LOCK_BACKEND, FileLock, FileLockError, FileLockTimeout
 from intentlog.storage import (
+    INTENTLOG_DIR,
+    BranchExistsError,
+    BranchNotFoundError,
+    ChainIntegrityError,
     IntentLogStorage,
     ProjectConfig,
-    ProjectNotFoundError,
     ProjectExistsError,
-    BranchNotFoundError,
-    BranchExistsError,
+    ProjectNotFoundError,
+    SignatureLossError,
+    StorageError,
     compute_intent_hash,
     find_project_root,
-    INTENTLOG_DIR,
 )
-from intentlog.core import Intent
+from intentlog.validation import ValidationError
 
 
 @pytest.fixture
@@ -342,3 +350,1494 @@ class TestFindProjectRoot:
         """Test when no project root exists"""
         found = find_project_root(temp_project_dir)
         assert found is None
+
+
+def _try_lock_in_thread(path, exclusive=True, timeout=0.3):
+    """Try to take a FileLock on `path` from another thread; return True if acquired."""
+    outcome = {}
+
+    def worker():
+        try:
+            with FileLock(path, exclusive=exclusive, timeout=timeout):
+                outcome["acquired"] = True
+        except FileLockTimeout:
+            outcome["acquired"] = False
+
+    t = threading.Thread(target=worker)
+    t.start()
+    t.join(timeout + 5)
+    assert not t.is_alive(), "lock attempt in helper thread hung"
+    return outcome["acquired"]
+
+
+class TestFileLockReentrancy:
+    """Tests for the per-thread re-entrant FileLock"""
+
+    def test_nested_locks_in_same_thread_do_not_block(self, temp_project_dir):
+        """Nested exclusive/shared requests inside an exclusive lock are no-ops"""
+        path = temp_project_dir / "data.json.lock"
+        outer = FileLock(path, exclusive=True, timeout=0.5)
+        with outer:
+            with FileLock(path, exclusive=True, timeout=0.5) as inner:
+                assert inner.is_locked
+                with FileLock(path, exclusive=False, timeout=0.5):
+                    pass
+            # Releasing the nested locks must not drop the outer lock
+            assert outer.is_locked
+            assert _try_lock_in_thread(path) is False
+        assert not outer.is_locked
+        assert _try_lock_in_thread(path) is True
+
+    def test_other_threads_are_excluded(self, temp_project_dir):
+        """A lock held by one thread blocks exclusive requests from another"""
+        path = temp_project_dir / "data.json.lock"
+        with FileLock(path, exclusive=True, timeout=0.5):
+            assert _try_lock_in_thread(path, exclusive=True) is False
+            assert _try_lock_in_thread(path, exclusive=False) is False
+        assert _try_lock_in_thread(path, exclusive=True) is True
+
+    @pytest.mark.skipif(LOCK_BACKEND != "fcntl", reason="shared locks need fcntl")
+    def test_shared_locks_allow_concurrent_readers(self, temp_project_dir):
+        """Shared locks from different threads do not exclude each other"""
+        path = temp_project_dir / "data.json.lock"
+        with FileLock(path, exclusive=False, timeout=0.5):
+            assert _try_lock_in_thread(path, exclusive=False) is True
+            assert _try_lock_in_thread(path, exclusive=True) is False
+
+    def test_shared_to_exclusive_upgrade_is_rejected(self, temp_project_dir):
+        """Upgrading a held shared lock to exclusive fails fast, not by timeout"""
+        path = temp_project_dir / "data.json.lock"
+        with FileLock(path, exclusive=False, timeout=0.5):
+            with pytest.raises(FileLockError):
+                FileLock(path, exclusive=True, timeout=0.5).acquire()
+
+    def test_release_without_acquire_is_noop(self, temp_project_dir):
+        """Releasing a lock that was never acquired does nothing"""
+        lock = FileLock(temp_project_dir / "data.json.lock")
+        lock.release()
+        assert not lock.is_locked
+
+
+class TestConcurrentAccess:
+    """Regression tests for lost updates under concurrent writes"""
+
+    def test_concurrent_add_intent_persists_every_write(self, initialized_project):
+        """8 threads x 25 add_intent calls -> exactly 200 unique intents persisted"""
+        project_root = initialized_project.project_root
+        num_threads = 8
+        per_thread = 25
+        errors = []
+        barrier = threading.Barrier(num_threads)
+
+        def worker(idx):
+            storage = IntentLogStorage(project_root)
+            try:
+                barrier.wait(timeout=5)
+                for i in range(per_thread):
+                    storage.add_intent(
+                        name=f"Thread {idx} intent {i}",
+                        reasoning=f"Concurrent write {idx}-{i}",
+                    )
+            except Exception as e:  # pragma: no cover - reported via assert
+                errors.append(repr(e))
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(num_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        assert not any(t.is_alive() for t in threads), "writer threads hung"
+        assert errors == []
+
+        intents = initialized_project.load_intents()
+        assert len(intents) == num_threads * per_thread
+        assert len({i.intent_id for i in intents}) == num_threads * per_thread
+        names = {i.intent_name for i in intents}
+        assert len(names) == num_threads * per_thread
+
+    def test_concurrent_add_chained_intent_keeps_chain_valid(self, initialized_project):
+        """Concurrent chained writes persist everything and leave a valid chain"""
+        project_root = initialized_project.project_root
+        num_threads = 4
+        per_thread = 10
+        errors = []
+
+        def worker(idx):
+            storage = IntentLogStorage(project_root)
+            try:
+                for i in range(per_thread):
+                    storage.add_chained_intent(
+                        name=f"Chained {idx}-{i}",
+                        reasoning="Concurrent chained write",
+                    )
+            except Exception as e:  # pragma: no cover - reported via assert
+                errors.append(repr(e))
+
+        threads = [threading.Thread(target=worker, args=(i,)) for i in range(num_threads)]
+        for t in threads:
+            t.start()
+        for t in threads:
+            t.join(timeout=30)
+
+        assert errors == []
+        chained = initialized_project.load_chained_intents()
+        assert len(chained) == num_threads * per_thread
+        assert initialized_project.verify_chain().valid
+
+    def test_nested_operations_inside_lock_branch_do_not_deadlock(self, initialized_project):
+        """load/save/add inside lock_branch() reuse the held lock instead of blocking"""
+        storage = initialized_project
+        storage.lock_timeout = 1.0
+
+        with storage.lock_branch() as branch:
+            assert branch == "main"
+            assert storage.load_intents() == []
+            storage.save_intents([Intent(intent_name="Saved", intent_reasoning="inside lock")])
+            storage.add_intent("Added", "inside lock")
+            with storage.lock_branch("main"):
+                storage.add_chained_intent("Chained", "inside nested lock")
+            assert len(storage.load_chained_intents()) == 3
+            # Still held: another thread must not get the exclusive lock
+            lock_path = storage._get_lock_file(storage._get_branch_file("main"))
+            assert _try_lock_in_thread(lock_path) is False
+
+        # Released on exit: another thread can now take it
+        assert _try_lock_in_thread(lock_path) is True
+        assert [i.intent_name for i in storage.load_intents()] == ["Saved", "Added", "Chained"]
+
+    def test_lock_branch_excludes_other_threads(self, initialized_project):
+        """lock_branch() held in one thread blocks lock_branch() in another"""
+        storage = initialized_project
+        other = IntentLogStorage(storage.project_root)
+        other.lock_timeout = 0.3
+        outcome = {}
+
+        def try_lock():
+            try:
+                with other.lock_branch("main"):
+                    outcome["result"] = "acquired"
+            except FileLockTimeout:
+                outcome["result"] = "timeout"
+
+        with storage.lock_branch("main"):
+            t = threading.Thread(target=try_lock)
+            t.start()
+            t.join(timeout=5)
+        assert outcome["result"] == "timeout"
+
+        t = threading.Thread(target=try_lock)
+        t.start()
+        t.join(timeout=5)
+        assert outcome["result"] == "acquired"
+
+    def test_lock_branch_resolves_current_branch(self, initialized_project):
+        """lock_branch(None) locks and yields the current branch"""
+        storage = initialized_project
+        storage.create_branch("develop")
+        storage.switch_branch("develop")
+        with storage.lock_branch() as branch:
+            assert branch == "develop"
+            storage.add_intent("On develop", "inside lock")
+        assert len(storage.load_intents("develop")) == 1
+        assert storage.load_intents("main") == []
+
+    @pytest.mark.skipif(LOCK_BACKEND == "none", reason="fallback backend removes its lock file")
+    def test_lock_files_live_under_temp(self, initialized_project):
+        """Locks live in .intentlog/temp/locks/, never next to the data files"""
+        storage = initialized_project
+        storage.create_branch("feature")
+        storage.add_intent("On feature", "lock file test", branch="feature")
+        storage.add_intent("On main", "lock file test")
+
+        locks = storage.intentlog_dir / "temp" / "locks"
+        assert (locks / "branches" / "feature.json.lock").is_file()
+        assert (locks / "intents.json.lock").is_file()
+        assert not list(storage.intentlog_dir.glob("*.lock"))
+        assert not list(storage.branches_dir.glob("*.lock"))
+        assert storage.list_branches() == ["feature", "main"]
+        # The data file itself is still the only thing read back
+        with open(storage.branches_dir / "feature.json") as f:
+            assert len(json.load(f)["intents"]) == 1
+
+    def test_gitignore_excludes_lock_files(self, initialized_project):
+        """Lock files sit under temp/, which init has always written to .gitignore"""
+        gitignore = initialized_project.intentlog_dir / ".gitignore"
+        assert "temp/" in gitignore.read_text().splitlines()
+
+    def test_config_branch_name_is_validated_before_locking(self, initialized_project):
+        """A traversal-style current_branch in config.json never creates files"""
+        storage = initialized_project
+        config_file = storage.intentlog_dir / "config.json"
+        config = json.loads(config_file.read_text())
+        config["current_branch"] = "../../escape"
+        config_file.write_text(json.dumps(config))
+        project_root = storage.intentlog_dir.parent
+
+        # load_config() refuses it, before any branch file or lock is touched
+        with pytest.raises(StorageError, match="'current_branch' is not a valid branch name"):
+            storage.add_intent("a", "b")
+
+        assert not list(project_root.rglob("escape*"))
+        assert not list(project_root.parent.glob("escape*"))
+
+
+class TestLockBranchSideEffects:
+    """lock_branch() must validate before it creates any lock sidecar"""
+
+    @staticmethod
+    def _failing_writes():
+        """Write paths that route through lock_branch() with an explicit branch"""
+        return [
+            ("add_intent", lambda s, b: s.add_intent("n", "r", branch=b)),
+            ("add_chained_intent", lambda s, b: s.add_chained_intent("n", "r", branch=b)),
+            ("migrate_to_chain", lambda s, b: s.migrate_to_chain(b)),
+            ("lock_branch", lambda s, b: s.lock_branch(b).__enter__()),
+        ]
+
+    def test_uninitialized_dir_raises_without_creating_intentlog(self, temp_project_dir):
+        """A failed write on an uninitialized dir leaves no .intentlog/ behind"""
+        for label, call in self._failing_writes():
+            target = temp_project_dir / label
+            target.mkdir()
+            storage = IntentLogStorage(target)
+            with pytest.raises(ProjectNotFoundError):
+                call(storage, "main")
+            assert not (target / INTENTLOG_DIR).exists(), label
+            assert list(target.iterdir()) == [], label
+            assert not storage.is_initialized()
+
+    def test_failed_write_in_subdir_does_not_shadow_project_root(self, initialized_project):
+        """A stray .intentlog/ in a subdirectory would hijack find_project_root()"""
+        root = initialized_project.project_root
+        sub = root / "src" / "pkg"
+        sub.mkdir(parents=True)
+        assert find_project_root(sub) == root
+
+        with pytest.raises(ProjectNotFoundError):
+            IntentLogStorage(sub).add_intent("n", "r", branch="main")
+
+        assert not (sub / INTENTLOG_DIR).exists()
+        assert find_project_root(sub) == root
+
+    def test_traversal_branch_name_raises_without_creating_files(self, initialized_project):
+        """A traversal-style branch name is rejected before any lock file is created"""
+        storage = initialized_project
+        root = storage.project_root
+        before = set(root.rglob("*"))
+
+        for label, call in self._failing_writes():
+            with pytest.raises(ValidationError):
+                call(storage, "../../outside")
+            with pytest.raises(ValidationError):
+                call(storage, "../../../escaped")
+            assert set(root.rglob("*")) == before, label
+
+        assert not (root / "outside.json.lock").exists()
+        assert not (root.parent / "escaped.json.lock").exists()
+        assert storage.list_branches() == ["main"]
+
+    def test_lock_branch_accepts_valid_names(self, initialized_project):
+        """Validation does not reject ordinary branch names, including main"""
+        storage = initialized_project
+        storage.create_branch("feature-x.1_y")
+        with storage.lock_branch("main") as branch:
+            assert branch == "main"
+        with storage.lock_branch("feature-x.1_y") as branch:
+            assert branch == "feature-x.1_y"
+            storage.add_intent("n", "r", branch=branch)
+        assert len(storage.load_intents("feature-x.1_y")) == 1
+
+
+# =========================================================================
+# Chain data and signatures survive ordinary writes
+# =========================================================================
+
+
+def _branch_data(storage, branch="main"):
+    with open(storage._get_branch_file(branch)) as f:
+        return json.load(f)
+
+
+def _tamper(storage, index, branch="main"):
+    """Rewrite one stored intent's reasoning without updating its hashes."""
+    path = storage._get_branch_file(branch)
+    data = json.loads(path.read_text())
+    data["intents"][index]["intent_reasoning"] = "rewritten after the fact"
+    path.write_text(json.dumps(data, indent=2))
+
+
+class TestChainPreservation:
+    """save_intents/create_branch/migrate_to_chain keep the stored chain."""
+
+    def test_plain_branch_stays_plain(self, initialized_project):
+        storage = initialized_project
+        storage.add_intent("a", "plain one")
+        storage.add_intent("b", "plain two")
+
+        data = _branch_data(storage)
+        assert "chain_version" not in data
+        assert all("chain_hash" not in e for e in data["intents"])
+        assert all("hash" in e for e in data["intents"])
+
+    def test_append_keeps_existing_chain_entries(self, initialized_project):
+        storage = initialized_project
+        storage.add_chained_intent("a", "first")
+        storage.add_chained_intent("b", "second")
+        before = _branch_data(storage)["intents"]
+
+        storage.add_intent("c", "plain append")
+
+        after = _branch_data(storage)["intents"]
+        assert after[:2] == before
+        assert after[2]["prev_hash"] == before[1]["chain_hash"]
+        assert after[2]["sequence"] == 2
+        assert storage.verify_chain().valid
+
+    def test_edit_rechains_only_from_changed_intent(self, initialized_project):
+        storage = initialized_project
+        for name in "abc":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        before = _branch_data(storage)["intents"]
+
+        intents = storage.load_intents()
+        intents[1].metadata["tags"] = ["x"]
+        assert storage.save_intents(intents, strict=True) == 0
+
+        after = _branch_data(storage)["intents"]
+        assert after[0] == before[0]
+        assert after[1]["metadata"]["tags"] == ["x"]
+        assert after[1]["chain_hash"] != before[1]["chain_hash"]
+        assert after[2]["prev_hash"] == after[1]["chain_hash"]
+        assert storage.verify_chain().valid
+
+    def test_unchanged_save_rewrites_nothing(self, initialized_project):
+        storage = initialized_project
+        for name in "ab":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        before = _branch_data(storage)
+
+        storage.save_intents(storage.load_intents(), strict=True)
+
+        assert _branch_data(storage) == before
+
+    def test_create_branch_copies_chain(self, initialized_project):
+        storage = initialized_project
+        for name in "ab":
+            storage.add_chained_intent(name, f"reasoning {name}")
+
+        storage.create_branch("feat")
+
+        feat = _branch_data(storage, "feat")
+        assert feat["intents"] == _branch_data(storage)["intents"]
+        assert feat["created_from"] == "main"
+        assert feat["root_hash"] == storage.get_root_hash("main")
+        assert storage.verify_chain("feat").valid
+
+    def test_migrate_keeps_existing_chain(self, initialized_project):
+        storage = initialized_project
+        for name in "ab":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        before = _branch_data(storage)
+
+        assert storage.migrate_to_chain() == 2
+        assert _branch_data(storage) == before
+
+    def test_migrate_chains_plain_branch(self, initialized_project):
+        storage = initialized_project
+        storage.add_intent("a", "plain one")
+        storage.add_intent("b", "plain two")
+
+        assert storage.migrate_to_chain() == 2
+
+        data = _branch_data(storage)
+        assert all("chain_hash" in e for e in data["intents"])
+        assert storage.verify_chain().valid
+
+    def test_strict_rewrite_over_broken_entry_is_refused(self, initialized_project):
+        storage = initialized_project
+        for name in "abc":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        _tamper(storage, 1)
+        before = _branch_data(storage)
+
+        intents = storage.load_intents()
+        intents[0].metadata["tags"] = ["x"]
+        with pytest.raises(ChainIntegrityError):
+            storage.save_intents(intents, strict=True)
+
+        assert _branch_data(storage) == before
+        assert not storage.verify_chain().valid
+
+    def test_edit_after_broken_entry_keeps_the_evidence(self, initialized_project):
+        storage = initialized_project
+        for name in "abc":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        _tamper(storage, 0)
+
+        intents = storage.load_intents()
+        intents[2].metadata["tags"] = ["x"]
+        storage.save_intents(intents, strict=True)
+
+        data = _branch_data(storage)
+        assert data["intents"][0]["intent_reasoning"] == "rewritten after the fact"
+        assert data["intents"][2]["metadata"]["tags"] == ["x"]
+        assert not storage.verify_chain().valid
+
+    def test_append_to_broken_chain_keeps_the_evidence(self, initialized_project):
+        storage = initialized_project
+        for name in "ab":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        _tamper(storage, 0)
+
+        storage.add_intent("c", "appended after tampering")
+
+        assert not storage.verify_chain().valid
+
+
+class TestStrippedChainEntries:
+    """Entries whose chain data was removed by hand are treated as damage."""
+
+    @staticmethod
+    def _strip_last(storage):
+        path = storage._get_branch_file("main")
+        data = json.loads(path.read_text())
+        for key in ("intent_hash", "prev_hash", "chain_hash", "sequence", "signature"):
+            data["intents"][-1].pop(key, None)
+        data["intents"][-1]["intent_reasoning"] = "rewritten after the fact"
+        path.write_text(json.dumps(data, indent=2))
+
+    def test_verify_reports_instead_of_crashing(self, initialized_project):
+        storage = initialized_project
+        for name in "ab":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        self._strip_last(storage)
+
+        result = storage.verify_chain()
+
+        assert not result.valid
+        assert result.broken_at == 1
+
+    def test_strict_rewrite_of_stripped_entry_is_refused(self, initialized_project):
+        storage = initialized_project
+        for name in "ab":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        self._strip_last(storage)
+        before = _branch_data(storage)
+
+        intents = storage.load_intents()
+        intents[1].metadata["tags"] = ["x"]
+        with pytest.raises(ChainIntegrityError):
+            storage.save_intents(intents, strict=True)
+
+        assert _branch_data(storage) == before
+
+    def test_migrate_refuses_unless_forced(self, initialized_project):
+        storage = initialized_project
+        for name in "ab":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        self._strip_last(storage)
+
+        with pytest.raises(ChainIntegrityError):
+            storage.migrate_to_chain()
+        assert not storage.verify_chain().valid
+
+        assert storage.migrate_to_chain(force=True) == 2
+        assert storage.verify_chain().valid
+
+
+def _strip(storage, index, branch="main"):
+    path = storage._get_branch_file(branch)
+    data = json.loads(path.read_text())
+    for key in ("intent_hash", "prev_hash", "chain_hash", "sequence", "signature"):
+        data["intents"][index].pop(key, None)
+    path.write_text(json.dumps(data, indent=2))
+
+
+class TestStrippedFirstEntry:
+    """Stripping the first entry must not turn the branch back into 'legacy'."""
+
+    def test_verify_reports_stripped_first_entry(self, initialized_project):
+        storage = initialized_project
+        for name in "abc":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        _strip(storage, 0)
+        _tamper(storage, 2)
+
+        result = storage.verify_chain()
+
+        assert not result.valid
+        assert result.broken_at == 0
+
+    def test_commit_on_stripped_branch_is_refused(self, initialized_project):
+        storage = initialized_project
+        for name in "ab":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        _strip(storage, 0)
+        before = _branch_data(storage)
+
+        with pytest.raises(ChainIntegrityError, match="migrate --force"):
+            storage.add_chained_intent("c", "appended to a damaged branch")
+
+        assert _branch_data(storage) == before
+
+    def test_migrate_force_repairs_stripped_and_empty_entries(self, initialized_project):
+        storage = initialized_project
+        for name in "abc":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        path = storage._get_branch_file("main")
+        data = json.loads(path.read_text())
+        data["intents"][1]["chain_hash"] = ""  # as an older build could persist
+        path.write_text(json.dumps(data, indent=2))
+        _strip(storage, 2)
+
+        assert storage.migrate_to_chain(force=True) == 3
+
+        assert storage.verify_chain().valid
+        assert all(e["chain_hash"] for e in _branch_data(storage)["intents"])
+
+    def test_branch_copy_of_damaged_chain_stays_repairable(self, initialized_project):
+        storage = initialized_project
+        for name in "abc":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        _strip(storage, 1)
+
+        storage.create_branch("copy")
+
+        assert _branch_data(storage, "copy")["intents"] == _branch_data(storage)["intents"]
+        assert not storage.verify_chain("copy").valid
+        storage.migrate_to_chain("copy", force=True)
+        assert storage.verify_chain("copy").valid
+
+
+class TestUnreadableChainedEntry:
+    """A chained entry that cannot be parsed is reported, never dropped."""
+
+    @staticmethod
+    def _break_entry(storage, index):
+        path = storage._get_branch_file("main")
+        data = json.loads(path.read_text())
+        del data["intents"][index]["prev_hash"]
+        path.write_text(json.dumps(data, indent=2))
+
+    def test_verify_reports_unreadable_entry(self, initialized_project):
+        storage = initialized_project
+        for name in "abc":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        self._break_entry(storage, 1)
+
+        result = storage.verify_chain()
+
+        assert not result.valid
+        assert result.entries_checked == 3
+
+    def test_commit_does_not_drop_unreadable_entry(self, initialized_project):
+        storage = initialized_project
+        for name in "abc":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        self._break_entry(storage, 1)
+        before = _branch_data(storage)
+
+        with pytest.raises(ChainIntegrityError):
+            storage.add_chained_intent("d", "appended to a damaged branch")
+
+        assert _branch_data(storage) == before
+
+
+class TestNonDictAndUnparseableEntries:
+    """Any unreadable entry on a chained branch is damage, wherever it is."""
+
+    @staticmethod
+    def _set_entry(storage, index, value):
+        path = storage._get_branch_file("main")
+        data = json.loads(path.read_text())
+        data["intents"][index] = value
+        path.write_text(json.dumps(data, indent=2))
+
+    @pytest.mark.parametrize("value", [None, "garbage", 42, ["x"]])
+    def test_non_dict_tail_entry_is_reported_and_not_dropped(self, initialized_project, value):
+        storage = initialized_project
+        for name in "abc":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        self._set_entry(storage, 2, value)
+        before = _branch_data(storage)
+
+        assert not storage.verify_chain().valid
+        assert len(storage.load_intents()) == 2  # readable entries, no crash
+        with pytest.raises(ChainIntegrityError):
+            storage.add_chained_intent("d", "appended to a damaged branch")
+        intents = storage.load_intents()
+        intents[0].metadata["tags"] = ["x"]
+        with pytest.raises(ChainIntegrityError):
+            storage.save_intents(intents, strict=True)
+
+        assert _branch_data(storage) == before
+
+    def test_stripped_and_unparseable_entry_is_reported(self, initialized_project):
+        storage = initialized_project
+        for name in "abc":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        _strip(storage, 2)
+        path = storage._get_branch_file("main")
+        data = json.loads(path.read_text())
+        data["intents"][2]["timestamp"] = "yesterday"
+        path.write_text(json.dumps(data, indent=2))
+
+        assert not storage.verify_chain().valid
+        with pytest.raises(ChainIntegrityError):
+            storage.add_chained_intent("d", "appended to a damaged branch")
+
+
+class TestRepairPaths:
+    """Damage blocks plain appends too, and can always be repaired with force."""
+
+    @staticmethod
+    def _null_entry(storage, index):
+        path = storage._get_branch_file("main")
+        data = json.loads(path.read_text())
+        data["intents"][index] = None
+        path.write_text(json.dumps(data, indent=2))
+
+    def test_add_intent_refuses_damaged_chain_unless_forced(self, initialized_project):
+        storage = initialized_project
+        for name in "abc":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        self._null_entry(storage, 1)
+        before = _branch_data(storage)
+
+        with pytest.raises(ChainIntegrityError):
+            storage.add_intent("d", "plain append")
+        assert _branch_data(storage) == before
+
+        storage.add_intent("d", "plain append", force=True)
+        assert storage.verify_chain().valid
+
+    def test_add_intent_on_intact_chain_needs_no_force(self, initialized_project):
+        storage = initialized_project
+        storage.add_chained_intent("a", "reasoning a")
+
+        storage.add_intent("b", "plain append")
+
+        assert storage.verify_chain().valid
+
+    def test_branch_with_only_unreadable_entries_can_be_repaired(self, initialized_project):
+        storage = initialized_project
+        storage.add_chained_intent("a", "reasoning a")
+        self._null_entry(storage, 0)
+
+        with pytest.raises(ChainIntegrityError):
+            storage.add_chained_intent("b", "appended to a damaged branch")
+        with pytest.raises(ChainIntegrityError):
+            storage.migrate_to_chain()
+
+        assert storage.migrate_to_chain(force=True) == 0
+        assert storage.verify_chain().valid
+        storage.add_chained_intent("b", "works again after the repair")
+        assert storage.verify_chain().valid
+
+
+class TestUnreadableLegacyEntries:
+    """On a branch without chain data, unreadable entries are never dropped silently."""
+
+    @staticmethod
+    def _legacy_branch(storage, entries):
+        path = storage._get_branch_file("main")
+        path.write_text(json.dumps({"branch": "main", "intents": entries}, indent=2))
+        return path
+
+    @staticmethod
+    def _entry(name, timestamp="2024-01-01T10:00:00"):
+        return {
+            "intent_id": f"id-{name}",
+            "intent_name": name,
+            "intent_reasoning": f"reasoning {name}",
+            "timestamp": timestamp,
+            "metadata": {},
+        }
+
+    def test_migrate_refuses_to_drop_unreadable_entries(self, initialized_project):
+        storage = initialized_project
+        broken = self._entry("broken")
+        del broken["timestamp"]
+        path = self._legacy_branch(storage, [broken])
+        before = path.read_text()
+
+        with pytest.raises(ChainIntegrityError, match="unreadable entry at position 0"):
+            storage.migrate_to_chain()
+        assert path.read_text() == before
+
+        assert storage.migrate_to_chain(force=True) == 0
+        assert storage.verify_chain().valid
+
+    def test_migrate_of_readable_legacy_branch_still_works(self, initialized_project):
+        storage = initialized_project
+        self._legacy_branch(storage, [self._entry("a"), self._entry("b")])
+
+        assert storage.migrate_to_chain() == 2
+        assert storage.verify_chain().valid
+
+    def test_strict_save_refuses_to_drop_unreadable_entry(self, initialized_project):
+        storage = initialized_project
+        path = self._legacy_branch(storage, [self._entry("a"), None])
+        before = path.read_text()
+
+        intents = storage.load_intents()
+        intents[0].metadata["tags"] = ["x"]
+        with pytest.raises(ChainIntegrityError, match="unreadable entry at position 1"):
+            storage.save_intents(intents, strict=True)
+        with pytest.raises(ChainIntegrityError):
+            storage.add_intent("b", "plain append")
+
+        assert path.read_text() == before
+
+    def test_first_chained_commit_refuses_to_drop_unreadable_entry(self, initialized_project):
+        storage = initialized_project
+        broken = self._entry("broken")
+        del broken["timestamp"]
+        path = self._legacy_branch(storage, [self._entry("a"), broken])
+        before = path.read_text()
+
+        with pytest.raises(ChainIntegrityError, match="migrate --force"):
+            storage.add_chained_intent("b", "first chained commit")
+        assert path.read_text() == before
+
+        storage.migrate_to_chain(force=True)
+        storage.add_chained_intent("b", "works after the explicit repair")
+        assert storage.verify_chain().valid
+
+    @pytest.mark.parametrize("value", ["2024-06-30Z", "20240630Z", "2024-W01-1Z"])
+    def test_date_only_z_values_stay_unreadable(self, value):
+        from intentlog.storage import _parse_datetime
+
+        with pytest.raises(ValueError):
+            _parse_datetime(value)
+
+    def test_utc_z_timestamps_are_readable_on_every_python(self, initialized_project):
+        storage = initialized_project
+        self._legacy_branch(storage, [self._entry("a", "2024-01-01T10:00:00Z")])
+
+        intents = storage.load_intents()
+
+        assert len(intents) == 1
+        assert intents[0].timestamp.utcoffset().total_seconds() == 0
+        assert storage.migrate_to_chain() == 1
+
+
+class TestRoundEightPolicyGaps:
+    """Z timestamps on chained entries, stripped markers, hints, branch copies."""
+
+    def test_chained_entry_with_z_timestamp_verifies_everywhere(self, initialized_project):
+        from datetime import timezone
+
+        from intentlog.merkle import chain_intents
+
+        storage = initialized_project
+        stamp = datetime(2024, 6, 30, 10, 0, tzinfo=timezone.utc)
+        chained = chain_intents([
+            Intent(intent_name="a", intent_reasoning="utc stamp", timestamp=stamp),
+            Intent(intent_name="b", intent_reasoning="local stamp"),
+        ])
+        storage.save_chained_intents(chained)
+        path = storage._get_branch_file("main")
+        data = json.loads(path.read_text())
+        assert data["intents"][0]["timestamp"] == "2024-06-30T10:00:00+00:00"
+        data["intents"][0]["timestamp"] = "2024-06-30T10:00:00Z"
+        path.write_text(json.dumps(data, indent=2))
+
+        assert storage.verify_chain().valid
+        storage.add_chained_intent("c", "commit still works")
+        assert storage.verify_chain().valid
+
+    @pytest.mark.parametrize(
+        "value, readable",
+        [
+            ("2024-01-01t10:00:00Z", True),
+            ("2024-01-01X10:00:00Z", True),
+            ("2024-01-01T10Z", True),
+            ("2024-01-01T10:00:00ZZ", False),
+            ("2024-01-01T10:00:00+00:00Z", False),
+            ("2024-06-30Z", False),
+        ],
+    )
+    def test_z_parsing_matches_python_311(self, value, readable):
+        from intentlog.timestamps import parse_iso_datetime
+
+        if readable:
+            assert parse_iso_datetime(value).utcoffset().total_seconds() == 0
+        else:
+            with pytest.raises(ValueError):
+                parse_iso_datetime(value)
+
+    def test_chain_with_markers_removed_is_still_a_chain(self, initialized_project):
+        storage = initialized_project
+        for name in "ab":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        path = storage._get_branch_file("main")
+        data = json.loads(path.read_text())
+        data.pop("chain_version")
+        data.pop("root_hash")
+        for entry in data["intents"]:
+            entry.pop("chain_hash")
+            entry["signature"] = {"key_id": "k", "signature": "x", "algorithm": "Ed25519"}
+        path.write_text(json.dumps(data, indent=2))
+        before = _branch_data(storage)
+
+        assert not storage.verify_chain().valid
+        with pytest.raises(ChainIntegrityError):
+            storage.add_chained_intent("c", "would strip the signatures")
+        intents = storage.load_intents()
+        intents[0].metadata["tags"] = ["x"]
+        with pytest.raises(ChainIntegrityError):
+            storage.save_intents(intents, strict=True)
+        assert _branch_data(storage) == before
+
+    def test_repair_hint_names_the_branch(self, initialized_project):
+        storage = initialized_project
+        storage.add_chained_intent("a", "on main")
+        storage.create_branch("feature")
+        _strip(storage, 0, branch="feature")
+
+        with pytest.raises(ChainIntegrityError, match="--branch feature"):
+            storage.add_chained_intent("b", "on feature", branch="feature")
+
+    def test_branch_copy_of_legacy_source_keeps_unreadable_entries(self, initialized_project):
+        storage = initialized_project
+        broken = {"intent_id": "id-b", "intent_name": "b", "intent_reasoning": "no timestamp"}
+        readable = {"intent_id": "id-a", "intent_name": "a", "intent_reasoning": "ok",
+                    "timestamp": "2024-01-01T10:00:00", "metadata": {}}
+        storage._get_branch_file("main").write_text(
+            json.dumps({"branch": "main", "intents": [readable, broken]})
+        )
+
+        storage.create_branch("copy")
+
+        assert _branch_data(storage, "copy")["intents"] == [readable, broken]
+        problem = storage.check_branch_integrity("copy")
+        assert problem.startswith("Branch 'copy' has an unreadable entry at position 1")
+        assert "migrate --force --branch copy" in problem
+
+    def test_check_branch_integrity_on_sound_branch(self, initialized_project):
+        storage = initialized_project
+        storage.add_chained_intent("a", "fine")
+
+        assert storage.check_branch_integrity() is None
+
+
+class TestRoundNineConsistency:
+    """Timestamps, verification and hints agree with each other everywhere."""
+
+    # Results Python 3.11+ gives natively; every supported Python must match
+    EXTENDED_CASES = [
+        ("2024-01-01T10:00:00.1Z", "2024-01-01T10:00:00.100000+00:00"),
+        ("2024-01-01T10:00:00.12Z", "2024-01-01T10:00:00.120000+00:00"),
+        ("2024-01-01T10:00:00.1234Z", "2024-01-01T10:00:00.123400+00:00"),
+        ("2024-01-01T10:00:00.1234567Z", "2024-01-01T10:00:00.123456+00:00"),
+        ("2024-01-01T10:00:00.123456789+02:00", "2024-01-01T10:00:00.123456+02:00"),
+        ("2024-01-01T10:00:00,123Z", "2024-01-01T10:00:00.123000+00:00"),
+        ("2024-01-01T10:00:00,5+01:00", "2024-01-01T10:00:00.500000+01:00"),
+        ("2024-01-01T10:00:00.12+02:00", "2024-01-01T10:00:00.120000+02:00"),
+    ]
+
+    @pytest.mark.parametrize("value, expected", EXTENDED_CASES)
+    def test_extended_timestamps_read_like_python_311(self, value, expected):
+        from intentlog.timestamps import parse_iso_datetime
+
+        assert parse_iso_datetime(value).isoformat() == expected
+
+    @pytest.mark.skipif(sys.version_info < (3, 11), reason="compares with the native 3.11+ parser")
+    @pytest.mark.parametrize("value, expected", EXTENDED_CASES)
+    def test_rewrite_matches_native_parser(self, value, expected):
+        from intentlog.timestamps import _as_python38_isoformat
+
+        assert datetime.fromisoformat(_as_python38_isoformat(value)) == datetime.fromisoformat(value)
+
+    def test_chained_entry_with_two_digit_fraction_verifies(self, initialized_project):
+        from datetime import timezone
+
+        from intentlog.merkle import chain_intents
+
+        storage = initialized_project
+        stamp = datetime(2024, 1, 1, 10, 0, 0, 120000, tzinfo=timezone.utc)
+        storage.save_chained_intents(chain_intents([
+            Intent(intent_name="a", intent_reasoning="go-style stamp", timestamp=stamp),
+        ]))
+        path = storage._get_branch_file("main")
+        data = json.loads(path.read_text())
+        data["intents"][0]["timestamp"] = "2024-01-01T10:00:00.12Z"
+        path.write_text(json.dumps(data, indent=2))
+
+        assert storage.verify_chain().valid
+
+    def test_verify_reports_unreadable_legacy_entry(self, initialized_project):
+        storage = initialized_project
+        readable = {"intent_id": "id-a", "intent_name": "a", "intent_reasoning": "ok",
+                    "timestamp": "2024-01-01T10:00:00", "metadata": {}}
+        broken = {"intent_id": "id-b", "intent_name": "b", "intent_reasoning": "no timestamp"}
+        storage._get_branch_file("main").write_text(
+            json.dumps({"branch": "main", "intents": [readable, broken]})
+        )
+
+        result = storage.verify_chain()
+
+        assert not result.valid
+        assert result.broken_at == 1
+
+    def test_save_intents_is_strict_by_default(self, initialized_project):
+        storage = initialized_project
+        for name in "ab":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        _strip(storage, 1)
+        intents = storage.load_intents()
+        intents[0].metadata["tags"] = ["x"]
+
+        with pytest.raises(ChainIntegrityError, match="--branch main"):
+            storage.save_intents(intents)
+
+
+class TestRoundTenFixes:
+    """First-problem reporting, accurate repair hints, ASCII digits, safe init."""
+
+    AR3 = "\u0663"  # ARABIC-INDIC DIGIT THREE
+
+    @pytest.mark.parametrize(
+        "value, expected",
+        [
+            # Results Python 3.11+ gives natively
+            (f"2024-01-01T10:00:00.123456{AR3}Z", "2024-01-01T10:00:00.123456+00:00"),
+            (f"2024-01-01T10:00:00.123456{AR3}", None),
+            (f"2024-01-01T10:00:00.12345{AR3}Z", None),
+            (f"2024-01-01T10:00:00.{AR3}Z", None),
+            (f"2024-01-01T10:00:0{AR3}Z", None),
+            (f"202{AR3}-01-01T10:00:00Z", None),
+        ],
+    )
+    def test_non_ascii_digits_follow_python_311(self, value, expected):
+        from intentlog.timestamps import parse_iso_datetime
+
+        if expected is None:
+            with pytest.raises(ValueError):
+                parse_iso_datetime(value)
+        else:
+            assert parse_iso_datetime(value).isoformat() == expected
+
+    @staticmethod
+    def _damaged_chain(storage):
+        for name in "abc":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        path = storage._get_branch_file("main")
+        data = json.loads(path.read_text())
+        data["intents"][0]["intent_reasoning"] = "TAMPERED"
+        del data["intents"][2]["timestamp"]
+        path.write_text(json.dumps(data, indent=2))
+
+    def test_integrity_check_reports_the_first_problem(self, initialized_project):
+        storage = initialized_project
+        self._damaged_chain(storage)
+
+        problem = storage.check_branch_integrity()
+
+        assert "fails chain verification at position 0" in problem
+        assert "remove the signatures" in problem
+        assert "to drop it" not in problem
+
+    def test_commit_hint_names_the_real_rebuild_point(self, initialized_project):
+        storage = initialized_project
+        self._damaged_chain(storage)
+
+        with pytest.raises(ChainIntegrityError, match="rebuilds the chain from position 0"):
+            storage.add_chained_intent("d", "refused")
+
+    def test_init_without_force_keeps_existing_intents(self, initialized_project):
+        storage = initialized_project
+        storage.add_chained_intent("a", "kept")
+        before = _branch_data(storage)
+        storage.config_path.unlink()
+
+        storage.init_project("recovered")
+
+        assert _branch_data(storage) == before
+        assert storage.load_config().project_name == "recovered"
+
+    def test_init_with_force_still_resets(self, initialized_project):
+        storage = initialized_project
+        storage.add_chained_intent("a", "reset")
+
+        storage.init_project("fresh", force=True)
+
+        assert storage.load_intents() == []
+
+
+class TestRoundElevenFixes:
+    """Refusal hints name the right branch and position; old Pythons never misread."""
+
+    @pytest.mark.parametrize(
+        "value", ["2024-01-01T10:00:45.+00:00", "2024-01-01T10:00:45,-05:30", "2024-01-01T10:00:45Z+00:00"]
+    )
+    def test_forms_python_311_rejects_are_refused_everywhere(self, value):
+        from intentlog.timestamps import parse_iso_datetime
+
+        with pytest.raises(ValueError):
+            parse_iso_datetime(value)
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "2024-01-01T10:00:45+00:00:00.123456",
+            "2024-01-01T10:00:45+00:00.5",
+            "2024-01-01T10:00:45+00,5",
+            "2024-01-01T10:00:45+0000.5",
+            "2024-01-01T10:00:45-05:30:15,5",
+            "2024-01-01T10:00-0530.5",
+        ],
+    )
+    def test_offset_followed_by_a_fraction_is_never_misread(self, value):
+        from intentlog.timestamps import parse_iso_datetime
+
+        # Versions disagree on some of these (3.11 and 3.12 drop the fraction
+        # of a zero offset, 3.13 keeps it), so every such value is refused
+        with pytest.raises(ValueError):
+            parse_iso_datetime(value)
+
+    @pytest.mark.parametrize(
+        "value, expected",
+        [
+            ("2024-01-01T10:00:45.5-05:30", "2024-01-01T10:00:45.500000-05:30"),
+            ("2024-01-01T10:00:45,25-05:00", "2024-01-01T10:00:45.250000-05:00"),
+            ("2024-01-01T10:00:45-05:30", "2024-01-01T10:00:45-05:30"),
+            ("2024-01-01T10:00:45.1-05:30:15", "2024-01-01T10:00:45.100000-05:30:15"),
+            ("2024-01-01T10:00:45,123+00:00:00", "2024-01-01T10:00:45.123000+00:00"),
+        ],
+    )
+    def test_fraction_before_an_offset_is_still_read(self, value, expected):
+        from intentlog.timestamps import parse_iso_datetime
+
+        assert parse_iso_datetime(value).isoformat() == expected
+
+    def test_merge_source_hint_names_the_source_branch(self, initialized_project):
+        storage = initialized_project
+        storage.add_chained_intent("a", "on main")
+        storage.create_branch("feat")
+        storage.add_chained_intent("b", "on feat", branch="feat")
+        storage.switch_branch("main")
+        path = storage._get_branch_file("feat")
+        data = json.loads(path.read_text())
+        data["intents"][1]["intent_reasoning"] = "TAMPERED"
+        path.write_text(json.dumps(data, indent=2))
+
+        problem = storage.check_branch_integrity("feat")
+
+        assert "fails chain verification at position 1" in problem
+        assert "migrate --force --branch feat" in problem
+
+    def test_unreadable_entry_on_chained_branch_offers_fixing_it(self, initialized_project):
+        storage = initialized_project
+        for name in "ab":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        path = storage._get_branch_file("main")
+        data = json.loads(path.read_text())
+        del data["intents"][1]["timestamp"]
+        path.write_text(json.dumps(data, indent=2))
+
+        problem = storage.check_branch_integrity()
+
+        assert "unreadable entry at position 1" in problem
+        assert "Fix the entry" in problem and "drop it" in problem
+
+    def test_commit_hint_uses_list_positions_not_sequence_numbers(self, initialized_project):
+        storage = initialized_project
+        for name in "abcd":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        path = storage._get_branch_file("main")
+        data = json.loads(path.read_text())
+        del data["intents"][1]  # remaining sequences: 0, 2, 3
+        for key in ("intent_hash", "prev_hash", "chain_hash", "sequence"):
+            data["intents"][2].pop(key)
+        path.write_text(json.dumps(data, indent=2))
+
+        with pytest.raises(ChainIntegrityError, match="rebuilds the chain from position 1"):
+            storage.add_chained_intent("e", "refused")
+
+
+class TestRoundTwelveFixes:
+    """Nothing may follow a UTC offset; malformed branch files are refused."""
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "2024-01-01T10:00:45+00:00:00:000001",  # ':' before the fraction
+            "2024-01-01T10:00:00+00:00:00:5",
+            "2024-01-01T10:00:45+000000123456",  # no separator at all
+            "2024W01T10+00:00.5",  # 7-character week date
+            "2024-01-01\n10-00:00:00.000001",  # newline as date-time separator
+            "2024-01-01T10:00:00+00:00\x00",  # 3.11+ stop reading at a NUL
+            "2024W01T10+00:00:00.0",
+            "2024-01-01T10:00:00+00:00 ",
+        ],
+    )
+    def test_anything_after_an_offset_is_refused(self, value):
+        from intentlog.timestamps import parse_iso_datetime
+
+        with pytest.raises(ValueError):
+            parse_iso_datetime(value)
+
+    @pytest.mark.parametrize("seconds", [0, 1, -1, 30, 19800, -19800, -37815, 50400, -50400])
+    @pytest.mark.parametrize("microsecond", [0, 1, 123456, 999999])
+    def test_isoformat_output_round_trips(self, seconds, microsecond):
+        from datetime import timedelta, timezone
+
+        from intentlog.timestamps import parse_iso_datetime
+
+        value = datetime(2024, 1, 1, 10, 0, 45, microsecond, tzinfo=timezone(timedelta(seconds=seconds)))
+        for text in (value.isoformat(), value.isoformat(" "), value.replace(tzinfo=None).isoformat()):
+            parsed = parse_iso_datetime(text)
+            assert parsed.isoformat() == datetime.fromisoformat(text).isoformat()
+
+    def test_sub_second_offset_is_refused(self):
+        from datetime import timedelta, timezone
+
+        from intentlog.timestamps import parse_iso_datetime
+
+        value = datetime(2024, 1, 1, 10, 0, 45, tzinfo=timezone(timedelta(seconds=19800, microseconds=5)))
+        with pytest.raises(ValueError):
+            parse_iso_datetime(value.isoformat())
+
+    MALFORMED = [
+        {"branch": "main", "chain_version": "1.0", "intents": {"0": {"intent_id": "x"}}},
+        {"branch": "main", "intents": "abc"},
+        {"branch": "main", "intents": 5},
+        {"branch": "main", "intents": None},
+        [{"intent_id": "a", "intent_name": "n", "intent_reasoning": "r", "timestamp": "2024-01-01T10:00:00"}],
+        "junk",
+        {"branch": "main"},
+        {"branch": "main", "entries": [{"intent_id": "a", "intent_name": "n", "intent_reasoning": "r"}]},
+    ]
+
+    @pytest.mark.parametrize("content", MALFORMED)
+    def test_malformed_branch_file_is_refused_and_kept(self, initialized_project, content):
+        storage = initialized_project
+        path = storage._get_branch_file("main")
+        path.write_text(json.dumps(content))
+        operations = [
+            storage.load_intents,
+            storage.load_chained_intents,
+            storage.verify_chain,
+            storage.check_branch_integrity,
+            lambda: storage.save_intents([Intent(intent_name="n", intent_reasoning="r")]),
+            lambda: storage.save_intents([Intent(intent_name="n", intent_reasoning="r")], strict=False),
+            lambda: storage.add_intent("n", "r", force=True),
+            lambda: storage.add_chained_intent("n", "r"),
+            lambda: storage.migrate_to_chain(force=True),
+            lambda: storage.create_branch("copy"),
+        ]
+
+        for operation in operations:
+            with pytest.raises(StorageError, match="not valid branch data"):
+                operation()
+
+        assert json.loads(path.read_text()) == content
+
+
+class TestRoundThirteenFixes:
+    """Files that are not valid JSON are refused with a message naming them."""
+
+    UNPARSEABLE = {
+        "empty": b"",
+        "truncated": b'{"branch": "main", "intents": [{"intent_id": "a"',
+        "conflict": b'<<<<<<< HEAD\n{"intents": []}\n=======\n{"intents": []}\n>>>>>>> other\n',
+        "bom": b'\xef\xbb\xbf{"branch": "main", "intents": []}',
+        "bad_utf8": b'{"branch": "main", "intents": [], "x": "\xff"}',
+        "deep": b"[" * 100000 + b"]" * 100000,
+        # Keeping both sides of a merge conflict hides one value per key
+        "duplicate_keys": b'{"branch": "main", "intents": [{"intent_id": "a", "intent_id": "b"}]}',
+    }
+
+    @pytest.mark.parametrize("name", sorted(UNPARSEABLE))
+    def test_unparseable_branch_file_is_refused_and_kept(self, initialized_project, name):
+        storage = initialized_project
+        path = storage._get_branch_file("main")
+        path.write_bytes(self.UNPARSEABLE[name])
+        operations = [
+            storage.load_intents,
+            storage.load_chained_intents,
+            storage.verify_chain,
+            storage.check_branch_integrity,
+            lambda: storage.save_intents([Intent(intent_name="n", intent_reasoning="r")], strict=False),
+            lambda: storage.add_chained_intent("n", "r"),
+            lambda: storage.migrate_to_chain(force=True),
+        ]
+
+        for operation in operations:
+            with pytest.raises(StorageError, match="intents.json is not valid JSON"):
+                operation()
+
+        assert path.read_bytes() == self.UNPARSEABLE[name]
+
+    @pytest.mark.parametrize("content", [b"", b"<<<<<<< HEAD\n{}\n=======\n{}\n>>>>>>> x\n", b"[]"])
+    def test_broken_config_names_a_working_repair(self, initialized_project, content):
+        storage = initialized_project
+        storage.add_chained_intent("a", "kept")
+        storage.config_path.write_bytes(content)
+
+        with pytest.raises(StorageError, match="config.json .*delete it and run 'ilog init <project-name>'"):
+            storage.load_config()
+
+        storage.config_path.unlink()
+        storage.init_project("recovered")
+        assert [i.intent_name for i in storage.load_intents()] == ["a"]
+
+
+class TestRoundFourteenFixes:
+    """Files are read as UTF-8, configs are checked, init keeps .gitignore."""
+
+    def test_utf8_text_survives_a_non_utf8_default_encoding(self, initialized_project, monkeypatch):
+        import builtins
+
+        import intentlog.storage as storage_module
+
+        def cp1252_default_open(file, mode="r", *args, **kwargs):
+            if "b" not in mode and "encoding" not in kwargs and len(args) < 2:
+                kwargs["encoding"] = "cp1252"
+            return builtins.open(file, mode, *args, **kwargs)
+
+        storage = initialized_project
+        storage.add_chained_intent("café — naïve", "r")
+        # IntentLog writes non-ASCII text as escapes; an editor or another
+        # tool may store it as raw UTF-8 instead
+        path = storage._get_branch_file("main")
+        path.write_bytes(json.dumps(json.loads(path.read_text()), ensure_ascii=False).encode("utf-8"))
+        monkeypatch.setattr(storage_module, "open", cp1252_default_open, raising=False)
+
+        storage.add_chained_intent("next", "r")
+
+        assert [i.intent_name for i in storage.load_intents()] == ["café — naïve", "next"]
+
+    @pytest.mark.parametrize(
+        "config",
+        [
+            {},
+            {"project_name": 5},
+            {"project_name": "p", "llm": "x"},
+            {"project_name": "p", "llm": {"provider": 3}},
+            {"project_name": "p", "current_branch": 7},
+            {"project_name": "p", "current_branch": "x\x1b[2J\nInjected line"},
+            {"project_name": "p", "version": None},
+            {"project_name": "p", "current_branch": "main\n"},
+            {"project_name": "p", "current_branch": " feature"},
+        ],
+    )
+    def test_unusable_config_is_refused_without_echoing_it(self, initialized_project, config):
+        storage = initialized_project
+        storage.config_path.write_text(json.dumps(config))
+
+        with pytest.raises(StorageError, match="is not a valid configuration") as excinfo:
+            storage.load_config()
+        assert "\x1b" not in str(excinfo.value)
+        assert "Injected" not in str(excinfo.value)
+
+    def test_reinit_keeps_gitignore_entries(self, initialized_project):
+        storage = initialized_project
+        gitignore = storage.intentlog_dir / ".gitignore"
+        gitignore.write_text(gitignore.read_text() + "mysecret.env\n")
+        storage.config_path.unlink()
+
+        storage.init_project("recovered")
+        after_first = gitignore.read_text()
+        storage.config_path.unlink()
+        storage.init_project("recovered")
+
+        assert "mysecret.env" in after_first.splitlines()
+        assert {"*.key", "temp/"} <= set(after_first.splitlines())
+        assert gitignore.read_text() == after_first
+
+    def test_init_adds_missing_default_entries(self, initialized_project):
+        storage = initialized_project
+        gitignore = storage.intentlog_dir / ".gitignore"
+        gitignore.write_text("mine")  # no trailing newline, no defaults
+
+        storage.init_project("again", force=True)
+
+        lines = gitignore.read_text().splitlines()
+        assert lines[0] == "mine"
+        assert {"*.key", "*.pem", "keys.json", "temp/"} <= set(lines)
+
+
+class TestRoundFifteenFixes:
+    """.gitignore handling works in any locale and follows git's whitespace rules."""
+
+    def test_init_writes_an_ascii_gitignore(self, initialized_project):
+        assert (initialized_project.intentlog_dir / ".gitignore").read_bytes().isascii()
+
+    @pytest.mark.skipif(not CRYPTO_AVAILABLE, reason="cryptography not installed")
+    def test_key_generation_accepts_a_gitignore_in_any_encoding(self, initialized_project):
+        storage = initialized_project
+        gitignore = storage.intentlog_dir / ".gitignore"
+        # An em dash in GBK, as older versions wrote it on Chinese Windows
+        gitignore.write_bytes(b"# IntentLog \xa1\xaa\n*.key\n")
+
+        with pytest.warns(UserWarning):
+            storage.get_key_manager().generate_key()
+
+        assert gitignore.read_bytes().endswith(b"keys/*.key\n")
+
+    def test_indented_entries_do_not_count_as_present(self, initialized_project):
+        storage = initialized_project
+        gitignore = storage.intentlog_dir / ".gitignore"
+        gitignore.write_bytes(b"    *.key\n\t*.pem\n")
+
+        storage.init_project("again", force=True)
+
+        lines = gitignore.read_bytes().splitlines()
+        assert b"*.key" in lines and b"*.pem" in lines
+
+    def test_crlf_and_trailing_spaces_still_count_as_present(self, initialized_project):
+        storage = initialized_project
+        gitignore = storage.intentlog_dir / ".gitignore"
+        from intentlog.storage import _GITIGNORE_ENTRIES
+
+        content = b"".join(entry.encode() + b"  \r\n" for entry in _GITIGNORE_ENTRIES)
+        gitignore.write_bytes(content)
+
+        storage.init_project("again", force=True)
+
+        assert gitignore.read_bytes() == content
+
+
+class TestRoundSixteenFixes:
+    """.gitignore lines are read the way git reads them."""
+
+    @pytest.mark.parametrize(
+        "content, present",
+        [
+            # Results of 'git check-ignore' for a file named a.key
+            (b"*.key\n", True),
+            (b"*.key  \r\n", True),
+            (b"*.key\r", True),
+            (b"\xef\xbb\xbf*.key\n", True),
+            (b"*.key\r\r\n", False),
+            (b"*.key\rjunk\n", False),
+            (b"# header\r*.key\r", False),
+            (b"*.key\\ \n", False),
+            (b"*.key\t\n", False),
+            (b" *.key\n", False),
+        ],
+    )
+    def test_patterns_match_git(self, content, present):
+        from intentlog.storage import _gitignore_patterns
+
+        assert (b"*.key" in _gitignore_patterns(content)) is present
+
+    def test_cr_only_line_endings_get_the_defaults_added(self, initialized_project):
+        storage = initialized_project
+        gitignore = storage.intentlog_dir / ".gitignore"
+        gitignore.write_bytes(gitignore.read_bytes().replace(b"\n", b"\r"))
+
+        storage.init_project("again", force=True)
+
+        from intentlog.storage import _gitignore_patterns
+
+        assert {b"*.key", b"temp/"} <= _gitignore_patterns(gitignore.read_bytes())
+
+    @pytest.mark.skipif(not CRYPTO_AVAILABLE, reason="cryptography not installed")
+    def test_key_generation_needs_a_real_keys_entry(self, initialized_project):
+        storage = initialized_project
+        gitignore = storage.intentlog_dir / ".gitignore"
+        gitignore.write_bytes(b"#keys/*.key\n  keys/*.key\n")
+
+        with pytest.warns(UserWarning):
+            storage.get_key_manager().generate_key()
+
+        from intentlog.storage import _gitignore_patterns
+
+        assert b"keys/*.key" in _gitignore_patterns(gitignore.read_bytes())
+
+
+class TestBranchNamesOnEveryPath:
+    @pytest.mark.parametrize("name", ["../escape", "../../x", "a/b", "bad name"])
+    def test_invalid_names_are_not_found_and_create_nothing(self, tmp_path, name):
+        # The project sits two levels down so an escaping name has somewhere
+        # private to land; the shared temp directory may change concurrently
+        project = tmp_path / "parent" / "project"
+        project.mkdir(parents=True)
+        storage = IntentLogStorage(project)
+        storage.init_project("test-project")
+        before = sorted(str(p) for p in tmp_path.rglob("*"))
+
+        with pytest.raises(BranchNotFoundError):
+            storage.load_intents(name)
+        with pytest.raises(BranchNotFoundError):
+            storage.save_intents([], name)
+
+        assert sorted(str(p) for p in tmp_path.rglob("*")) == before
+
+
+@pytest.mark.skipif(not CRYPTO_AVAILABLE, reason="cryptography not installed")
+class TestSignedChainPreservation:
+    """Signatures survive every write that does not change their intents."""
+
+    @pytest.fixture
+    def signed_project(self, initialized_project):
+        storage = initialized_project
+        with pytest.warns(UserWarning):
+            storage.get_key_manager().generate_key()
+        for name in "abc":
+            storage.add_chained_intent(name, f"reasoning {name}", sign=True)
+        return storage
+
+    @staticmethod
+    def _signed(storage, branch="main"):
+        return [e.get("signature") is not None for e in _branch_data(storage, branch)["intents"]]
+
+    def test_strict_edit_is_refused_and_leaves_file_unchanged(self, signed_project):
+        storage = signed_project
+        before = _branch_data(storage)
+        intents = storage.load_intents()
+        intents[0].metadata["tags"] = ["x"]
+
+        with pytest.raises(SignatureLossError) as excinfo:
+            storage.save_intents(intents, strict=True)
+
+        assert excinfo.value.count == 3
+        assert excinfo.value.branch == "main"
+        assert _branch_data(storage) == before
+
+    def test_edit_removes_only_invalidated_signatures(self, signed_project):
+        storage = signed_project
+        intents = storage.load_intents()
+        intents[2].metadata["tags"] = ["x"]
+
+        # Removing signatures needs an explicit opt-in
+        with pytest.raises(SignatureLossError):
+            storage.save_intents(intents)
+        assert storage.save_intents(intents, strict=False) == 1
+
+        assert self._signed(storage) == [True, True, False]
+        chained = storage.load_chained_intents()
+        assert storage.verify_intent_signature(chained[0])
+        assert storage.verify_intent_signature(chained[1])
+        assert storage.verify_chain().valid
+
+    def test_append_keeps_signatures_valid(self, signed_project):
+        storage = signed_project
+        storage.add_intent("d", "plain append")
+
+        assert self._signed(storage) == [True, True, True, False]
+        for chained in storage.load_chained_intents()[:3]:
+            assert storage.verify_intent_signature(chained)
+
+    def test_migrate_keeps_signatures(self, signed_project):
+        storage = signed_project
+        before = _branch_data(storage)
+
+        assert storage.migrate_to_chain() == 3
+
+        assert _branch_data(storage) == before
+        assert self._signed(storage) == [True, True, True]
+
+    def test_create_branch_keeps_signatures_valid(self, signed_project):
+        storage = signed_project
+        storage.create_branch("feat")
+
+        assert self._signed(storage, "feat") == [True, True, True]
+        for chained in storage.load_chained_intents("feat"):
+            assert storage.verify_intent_signature(chained)
+

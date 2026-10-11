@@ -39,6 +39,7 @@ ilog init my-project
 
 # Record your first intent
 ilog commit "Starting with a monolith because the team is 3 people. Will split services when we hit scaling pain."
+# → [a1b2c3d4e5f6] main: Starting with a monolith because the team is 3 ...
 
 # See your reasoning history
 ilog log
@@ -46,7 +47,8 @@ ilog log
 # Search past decisions
 ilog search "monolith"
 
-# See full details for a specific intent
+# See full details for a specific intent. The hash changes once the intent is
+# tagged or linked; `ilog show` prints the stable intent ID for scripts to keep.
 ilog show a1b2c3d4
 
 # Show project status with git context
@@ -64,12 +66,14 @@ ilog status
 | `ilog log` | View intent history with git context |
 | `ilog search <query>` | Search intents by keyword |
 | `ilog show <id>` | Display a single intent with full metadata |
+| `ilog tag <id> <tag>...` | Add or remove tags on an intent |
+| `ilog link <source> <target>` | Link two intents (target may live on another branch) |
 | `ilog status` | Project status with git info |
 | `ilog branch [name]` | Create/switch/list branches |
 | `ilog diff <spec>` | Compare branches |
 | `ilog merge <branch>` | Merge intent branches |
 | `ilog blame <file>` | Show intent reasoning for a file's git history |
-| `ilog hooks install` | Install git hooks (prepare-commit-msg) |
+| `ilog hooks install` | Show the latest intent in the commit editor (prepare-commit-msg and commit-msg hooks) |
 | `ilog config` | Configure settings |
 
 All commands support `--json` for scripting where applicable.
