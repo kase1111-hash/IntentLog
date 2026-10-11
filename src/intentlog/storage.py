@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any, Dict, Iterator, List, Optional, Tuple
 
 from .core import Intent
 from .logging import get_logger, log_context
+from .timestamps import parse_iso_datetime
 from .validation import ValidationError, validate_branch_name, validate_project_name
 
 logger = get_logger(__name__)
@@ -66,16 +67,8 @@ def _parse_datetime(value: str, field_name: str = "timestamp") -> datetime:
         ValueError: If the datetime string is invalid
     """
     try:
-        return datetime.fromisoformat(value)
+        return parse_iso_datetime(value)
     except (ValueError, TypeError) as e:
-        # Python < 3.11 rejects a 'Z' UTC suffix on a date-and-time value,
-        # which 3.11+ accepts. Map only that case, so a value is readable on
-        # every supported Python exactly when it is readable on 3.11+.
-        if isinstance(value, str) and value.endswith("Z") and len(value) > 11 and value[10] in "T ":
-            try:
-                return datetime.fromisoformat(value[:-1] + "+00:00")
-            except ValueError:
-                pass
         raise ValueError(f"Invalid {field_name} format '{value}': {e}") from e
 
 # Lazy imports to avoid circular dependencies
@@ -280,12 +273,22 @@ def _readable_as_intent(entry: Any) -> bool:
         return False
 
 
+# Fields only a hash-chained entry carries ("hash" is in the legacy format too)
+_CHAIN_FIELDS = ("chain_hash", "intent_hash", "prev_hash", "sequence", "signature")
+
+
 def _is_chained_data(data: Dict[str, Any]) -> bool:
-    """True if raw branch data carries hash-chain information."""
-    if "chain_version" in data:
+    """
+    True if raw branch data carries hash-chain information.
+
+    Any chain field counts, so a chained branch whose markers were partly
+    removed is still handled as a (damaged) chain, never as legacy data
+    that could be re-chained and stripped of its signatures.
+    """
+    if "chain_version" in data or "root_hash" in data:
         return True
     return any(
-        isinstance(entry, dict) and "chain_hash" in entry
+        isinstance(entry, dict) and any(key in entry for key in _CHAIN_FIELDS)
         for entry in data.get("intents", [])
     )
 
@@ -852,27 +855,14 @@ class IntentLogStorage:
                 "created_at": datetime.now().isoformat(),
             }
 
+            # The new branch starts as an exact copy of the stored source:
+            # chain links, signatures and any damage or unreadable entries
+            # included, so nothing is silently left behind
             source = self._read_branch_data(self._get_branch_file(from_branch))
-            if _is_chained_data(source):
-                # Keep chain links and signatures: the new branch starts as an
-                # exact copy of the stored source chain, damage included.
-                for key in ("chain_version", "root_hash"):
-                    if key in source:
-                        data[key] = source[key]
-                data["intents"] = list(source.get("intents", []))
-            else:
-                data["intents"] = [
-                    {
-                        "intent_id": i.intent_id,
-                        "intent_name": i.intent_name,
-                        "intent_reasoning": i.intent_reasoning,
-                        "timestamp": i.timestamp.isoformat() if isinstance(i.timestamp, datetime) else i.timestamp,
-                        "metadata": i.metadata,
-                        "parent_intent_id": i.parent_intent_id,
-                        "hash": compute_intent_hash(i),
-                    }
-                    for i in intents
-                ]
+            for key in ("chain_version", "root_hash"):
+                if key in source:
+                    data[key] = source[key]
+            data["intents"] = list(source.get("intents", []))
 
             _atomic_write_json(new_branch_file, data)
 
@@ -1145,7 +1135,7 @@ class IntentLogStorage:
                     raise ChainIntegrityError(
                         f"Branch '{locked_branch}' has an unreadable entry at position "
                         f"{unreadable[0]}; committing would drop it. Fix the entry, or run "
-                        "'ilog chain migrate --force' to drop it explicitly"
+                        f"'ilog chain migrate --force --branch {locked_branch}' to drop it explicitly"
                     )
 
             # Load existing chain
@@ -1154,8 +1144,9 @@ class IntentLogStorage:
             if damaged:
                 raise ChainIntegrityError(
                     f"Branch '{locked_branch}' has entries without chain data "
-                    f"(position {damaged[0]}). Run 'ilog chain verify' for details; "
-                    "'ilog chain migrate --force' rebuilds the chain from that point"
+                    f"(position {damaged[0]}). Run 'ilog chain verify --branch {locked_branch}' "
+                    f"for details; 'ilog chain migrate --force --branch {locked_branch}' rebuilds "
+                    "the chain from that point"
                 )
 
             # Append to chain
@@ -1212,6 +1203,32 @@ class IntentLogStorage:
 
         chained = self.load_chained_intents(branch)
         return verify_chain(chained)
+
+    def check_branch_integrity(self, branch: Optional[str] = None) -> Optional[str]:
+        """
+        Describe the first problem with a branch's stored data, if any.
+
+        Reports a chain that fails verification on a chained branch, or an
+        entry that cannot be read on any branch.
+
+        Args:
+            branch: Branch to check. If None, uses current branch.
+
+        Returns:
+            A description of the problem, or None if the branch is sound
+        """
+        branch = branch or self.load_config().current_branch
+        data = self._read_branch_data(self._get_branch_file(branch))
+        if not data and branch != "main":
+            raise BranchNotFoundError(f"Branch '{branch}' not found")
+        if _is_chained_data(data):
+            result = self.verify_chain(branch)
+            if not result.valid:
+                return f"Branch '{branch}' fails chain verification at sequence {result.broken_at}"
+        for i, entry in enumerate(data.get("intents", [])):
+            if not _readable_as_intent(entry):
+                return f"Branch '{branch}' has an unreadable entry at position {i}"
+        return None
 
     def get_root_hash(self, branch: Optional[str] = None) -> str:
         """

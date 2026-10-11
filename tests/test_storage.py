@@ -1120,6 +1120,106 @@ class TestUnreadableLegacyEntries:
         assert storage.migrate_to_chain() == 1
 
 
+class TestRoundEightPolicyGaps:
+    """Z timestamps on chained entries, stripped markers, hints, branch copies."""
+
+    def test_chained_entry_with_z_timestamp_verifies_everywhere(self, initialized_project):
+        from datetime import timezone
+
+        from intentlog.merkle import chain_intents
+
+        storage = initialized_project
+        stamp = datetime(2024, 6, 30, 10, 0, tzinfo=timezone.utc)
+        chained = chain_intents([
+            Intent(intent_name="a", intent_reasoning="utc stamp", timestamp=stamp),
+            Intent(intent_name="b", intent_reasoning="local stamp"),
+        ])
+        storage.save_chained_intents(chained)
+        path = storage._get_branch_file("main")
+        data = json.loads(path.read_text())
+        assert data["intents"][0]["timestamp"] == "2024-06-30T10:00:00+00:00"
+        data["intents"][0]["timestamp"] = "2024-06-30T10:00:00Z"
+        path.write_text(json.dumps(data, indent=2))
+
+        assert storage.verify_chain().valid
+        storage.add_chained_intent("c", "commit still works")
+        assert storage.verify_chain().valid
+
+    @pytest.mark.parametrize(
+        "value, readable",
+        [
+            ("2024-01-01t10:00:00Z", True),
+            ("2024-01-01X10:00:00Z", True),
+            ("2024-01-01T10Z", True),
+            ("2024-01-01T10:00:00ZZ", False),
+            ("2024-01-01T10:00:00+00:00Z", False),
+            ("2024-06-30Z", False),
+        ],
+    )
+    def test_z_parsing_matches_python_311(self, value, readable):
+        from intentlog.timestamps import parse_iso_datetime
+
+        if readable:
+            assert parse_iso_datetime(value).utcoffset().total_seconds() == 0
+        else:
+            with pytest.raises(ValueError):
+                parse_iso_datetime(value)
+
+    def test_chain_with_markers_removed_is_still_a_chain(self, initialized_project):
+        storage = initialized_project
+        for name in "ab":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        path = storage._get_branch_file("main")
+        data = json.loads(path.read_text())
+        data.pop("chain_version")
+        data.pop("root_hash")
+        for entry in data["intents"]:
+            entry.pop("chain_hash")
+            entry["signature"] = {"key_id": "k", "signature": "x", "algorithm": "Ed25519"}
+        path.write_text(json.dumps(data, indent=2))
+        before = _branch_data(storage)
+
+        assert not storage.verify_chain().valid
+        with pytest.raises(ChainIntegrityError):
+            storage.add_chained_intent("c", "would strip the signatures")
+        intents = storage.load_intents()
+        intents[0].metadata["tags"] = ["x"]
+        with pytest.raises(ChainIntegrityError):
+            storage.save_intents(intents, strict=True)
+        assert _branch_data(storage) == before
+
+    def test_repair_hint_names_the_branch(self, initialized_project):
+        storage = initialized_project
+        storage.add_chained_intent("a", "on main")
+        storage.create_branch("feature")
+        _strip(storage, 0, branch="feature")
+
+        with pytest.raises(ChainIntegrityError, match="--branch feature"):
+            storage.add_chained_intent("b", "on feature", branch="feature")
+
+    def test_branch_copy_of_legacy_source_keeps_unreadable_entries(self, initialized_project):
+        storage = initialized_project
+        broken = {"intent_id": "id-b", "intent_name": "b", "intent_reasoning": "no timestamp"}
+        readable = {"intent_id": "id-a", "intent_name": "a", "intent_reasoning": "ok",
+                    "timestamp": "2024-01-01T10:00:00", "metadata": {}}
+        storage._get_branch_file("main").write_text(
+            json.dumps({"branch": "main", "intents": [readable, broken]})
+        )
+
+        storage.create_branch("copy")
+
+        assert _branch_data(storage, "copy")["intents"] == [readable, broken]
+        assert storage.check_branch_integrity("copy") == (
+            "Branch 'copy' has an unreadable entry at position 1"
+        )
+
+    def test_check_branch_integrity_on_sound_branch(self, initialized_project):
+        storage = initialized_project
+        storage.add_chained_intent("a", "fine")
+
+        assert storage.check_branch_integrity() is None
+
+
 class TestBranchNamesOnEveryPath:
     @pytest.mark.parametrize("name", ["../escape", "../../x", "a/b", "bad name"])
     def test_invalid_names_are_not_found_and_create_nothing(self, initialized_project, name):
