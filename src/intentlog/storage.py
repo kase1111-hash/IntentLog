@@ -346,9 +346,14 @@ def _config_problem(data: Any) -> Optional[str]:
     llm = data.get("llm", {})
     if not isinstance(llm, dict) or not all(isinstance(v, str) for v in llm.values()):
         return "'llm' must be an object of strings"
+    current_branch = data.get("current_branch", "main")
     try:
-        validate_branch_name(data.get("current_branch", "main"))
+        # The validator strips whitespace; a name it changes is not one
+        # branch files are stored under
+        valid = validate_branch_name(current_branch) == current_branch
     except ValidationError:
+        valid = False
+    if not valid:
         return "'current_branch' is not a valid branch name"
     return None
 
@@ -585,10 +590,12 @@ class IntentLogStorage:
         # default entries it lacks.
         gitignore_path = self.intentlog_dir / ".gitignore"
         current = gitignore_path.read_bytes() if gitignore_path.is_file() else b""
-        present = {line.strip() for line in current.splitlines()}
+        # Git ignores a trailing CR and trailing spaces, but leading
+        # whitespace is part of the pattern
+        present = {line.rstrip(b"\r").rstrip(b" ") for line in current.splitlines()}
         missing = [entry for entry in _GITIGNORE_ENTRIES if entry.encode() not in present]
         if not current:
-            lines = ["# IntentLog sensitive data — never commit!"] + missing
+            lines = ["# IntentLog sensitive data - never commit!"] + missing
         else:
             lines = ([""] if not current.endswith(b"\n") else []) + missing
         if missing:

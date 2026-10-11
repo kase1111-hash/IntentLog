@@ -1621,6 +1621,8 @@ class TestRoundFourteenFixes:
             {"project_name": "p", "current_branch": 7},
             {"project_name": "p", "current_branch": "x\x1b[2J\nInjected line"},
             {"project_name": "p", "version": None},
+            {"project_name": "p", "current_branch": "main\n"},
+            {"project_name": "p", "current_branch": " feature"},
         ],
     )
     def test_unusable_config_is_refused_without_echoing_it(self, initialized_project, config):
@@ -1657,6 +1659,47 @@ class TestRoundFourteenFixes:
         lines = gitignore.read_text().splitlines()
         assert lines[0] == "mine"
         assert {"*.key", "*.pem", "keys.json", "temp/"} <= set(lines)
+
+
+class TestRoundFifteenFixes:
+    """.gitignore handling works in any locale and follows git's whitespace rules."""
+
+    def test_init_writes_an_ascii_gitignore(self, initialized_project):
+        assert (initialized_project.intentlog_dir / ".gitignore").read_bytes().isascii()
+
+    @pytest.mark.skipif(not CRYPTO_AVAILABLE, reason="cryptography not installed")
+    def test_key_generation_accepts_a_gitignore_in_any_encoding(self, initialized_project):
+        storage = initialized_project
+        gitignore = storage.intentlog_dir / ".gitignore"
+        # An em dash in GBK, as older versions wrote it on Chinese Windows
+        gitignore.write_bytes(b"# IntentLog \xa1\xaa\n*.key\n")
+
+        with pytest.warns(UserWarning):
+            storage.get_key_manager().generate_key()
+
+        assert gitignore.read_bytes().endswith(b"keys/*.key\n")
+
+    def test_indented_entries_do_not_count_as_present(self, initialized_project):
+        storage = initialized_project
+        gitignore = storage.intentlog_dir / ".gitignore"
+        gitignore.write_bytes(b"    *.key\n\t*.pem\n")
+
+        storage.init_project("again", force=True)
+
+        lines = gitignore.read_bytes().splitlines()
+        assert b"*.key" in lines and b"*.pem" in lines
+
+    def test_crlf_and_trailing_spaces_still_count_as_present(self, initialized_project):
+        storage = initialized_project
+        gitignore = storage.intentlog_dir / ".gitignore"
+        from intentlog.storage import _GITIGNORE_ENTRIES
+
+        content = b"".join(entry.encode() + b"  \r\n" for entry in _GITIGNORE_ENTRIES)
+        gitignore.write_bytes(content)
+
+        storage.init_project("again", force=True)
+
+        assert gitignore.read_bytes() == content
 
 
 class TestBranchNamesOnEveryPath:

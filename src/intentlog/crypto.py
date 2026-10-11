@@ -348,9 +348,11 @@ class KeyManager:
         # Add to .gitignore if not already there
         gitignore = self.intentlog_dir / ".gitignore"
         if gitignore.exists():
-            content = gitignore.read_text()
-            if "keys/*.key" not in content:
-                with open(gitignore, "a") as f:
+            # Read as bytes: the file may be in any encoding (older versions
+            # wrote it in the locale's), and only an ASCII entry is looked for
+            content = gitignore.read_bytes()
+            if b"keys/*.key" not in content:
+                with open(gitignore, "a", encoding="utf-8") as f:
                     f.write("\n# Private keys - never commit!\nkeys/*.key\n")
 
     def _load_metadata(self) -> Dict[str, Any]:
