@@ -1334,7 +1334,7 @@ class TestRoundTenFixes:
 
         problem = storage.check_branch_integrity()
 
-        assert "fails chain verification at sequence 0" in problem
+        assert "fails chain verification at position 0" in problem
         assert "remove the signatures" in problem
         assert "to drop it" not in problem
 
@@ -1342,7 +1342,7 @@ class TestRoundTenFixes:
         storage = initialized_project
         self._damaged_chain(storage)
 
-        with pytest.raises(ChainIntegrityError, match=r"fails verification \(position 0\)"):
+        with pytest.raises(ChainIntegrityError, match="rebuilds the chain from position 0"):
             storage.add_chained_intent("d", "refused")
 
     def test_init_without_force_keeps_existing_intents(self, initialized_project):
@@ -1363,6 +1363,73 @@ class TestRoundTenFixes:
         storage.init_project("fresh", force=True)
 
         assert storage.load_intents() == []
+
+
+class TestRoundElevenFixes:
+    """Refusal hints name the right branch and position; old Pythons never misread."""
+
+    @pytest.mark.parametrize(
+        "value", ["2024-01-01T10:00:45.+00:00", "2024-01-01T10:00:45,-05:30", "2024-01-01T10:00:45Z+00:00"]
+    )
+    def test_forms_python_311_rejects_are_refused_everywhere(self, value):
+        from intentlog.timestamps import parse_iso_datetime
+
+        with pytest.raises(ValueError):
+            parse_iso_datetime(value)
+
+    def test_offset_with_fractional_seconds_is_never_misread(self):
+        from intentlog.timestamps import parse_iso_datetime
+
+        value = "2024-01-01T10:00:45+00:00:00.123456"
+        if sys.version_info >= (3, 11):
+            assert parse_iso_datetime(value).isoformat() == value
+        else:  # older versions would drop the offset's fraction
+            with pytest.raises(ValueError):
+                parse_iso_datetime(value)
+
+    def test_merge_source_hint_names_the_source_branch(self, initialized_project):
+        storage = initialized_project
+        storage.add_chained_intent("a", "on main")
+        storage.create_branch("feat")
+        storage.add_chained_intent("b", "on feat", branch="feat")
+        storage.switch_branch("main")
+        path = storage._get_branch_file("feat")
+        data = json.loads(path.read_text())
+        data["intents"][1]["intent_reasoning"] = "TAMPERED"
+        path.write_text(json.dumps(data, indent=2))
+
+        problem = storage.check_branch_integrity("feat")
+
+        assert "fails chain verification at position 1" in problem
+        assert "migrate --force --branch feat" in problem
+
+    def test_unreadable_entry_on_chained_branch_offers_fixing_it(self, initialized_project):
+        storage = initialized_project
+        for name in "ab":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        path = storage._get_branch_file("main")
+        data = json.loads(path.read_text())
+        del data["intents"][1]["timestamp"]
+        path.write_text(json.dumps(data, indent=2))
+
+        problem = storage.check_branch_integrity()
+
+        assert "unreadable entry at position 1" in problem
+        assert "Fix the entry" in problem and "drop it" in problem
+
+    def test_commit_hint_uses_list_positions_not_sequence_numbers(self, initialized_project):
+        storage = initialized_project
+        for name in "abcd":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        path = storage._get_branch_file("main")
+        data = json.loads(path.read_text())
+        del data["intents"][1]  # remaining sequences: 0, 2, 3
+        for key in ("intent_hash", "prev_hash", "chain_hash", "sequence"):
+            data["intents"][2].pop(key)
+        path.write_text(json.dumps(data, indent=2))
+
+        with pytest.raises(ChainIntegrityError, match="rebuilds the chain from position 1"):
+            storage.add_chained_intent("e", "refused")
 
 
 class TestBranchNamesOnEveryPath:

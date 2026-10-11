@@ -23,6 +23,11 @@ _EXTENDED = re.compile(
 # A fraction only ever follows the seconds field
 _FRACTION = re.compile(r"(?<=:[0-9]{2})[.,](\d+)$")
 
+# Forms fromisoformat() accepts before Python 3.11 but 3.11+ rejects or reads
+# differently: an empty fraction ('10:00:45.+00:00'), anything after a 'Z',
+# and an offset with fractional seconds (whose fraction older versions drop)
+_NOT_PYTHON_311 = re.compile(r"[.,](?![0-9])|Z.|[+-][0-9]{2}:[0-9]{2}:[0-9]{2}[.,]")
+
 
 def _as_python38_isoformat(value: str) -> Optional[str]:
     """
@@ -57,19 +62,25 @@ def parse_iso_datetime(value: str) -> datetime:
     versions, an extended-format value that fromisoformat() rejects there
     (a 'Z' suffix, a ',' decimal, or a fraction that is not 3 or 6 digits
     long) is rewritten to the equivalent form those versions accept, so it
-    is read the same way everywhere. Nothing that 3.11+ rejects is ever
-    accepted. Basic-format values (no '-' or ':' separators) and a few forms
-    3.11+ tolerates (a fraction on the hour or minute field, non-digits after
-    the sixth fraction digit) still need Python 3.11+.
+    is read the same way everywhere. Forms that older versions accept but
+    3.11+ rejects or reads differently (an empty fraction, anything after a
+    'Z', an offset with fractional seconds) are refused there. So on every
+    supported Python a value is either read exactly as 3.11+ reads it or
+    refused. Some forms 3.11+ also tolerates still need Python 3.11+:
+    basic format (no '-' or ':' separators, including offsets like +0000),
+    a fraction on the hour or minute field, and offsets with seconds.
 
     Raises:
         ValueError: If the value is not a valid timestamp
         TypeError: If the value is not a string
     """
+    old_python = sys.version_info < (3, 11)
+    if old_python and isinstance(value, str) and _NOT_PYTHON_311.search(value):
+        raise ValueError(f"Invalid isoformat string: {value!r}")
     try:
         return datetime.fromisoformat(value)
     except ValueError:
-        if sys.version_info < (3, 11) and isinstance(value, str):
+        if old_python and isinstance(value, str):
             rewritten = _as_python38_isoformat(value)
             if rewritten is not None and rewritten != value:
                 return datetime.fromisoformat(rewritten)

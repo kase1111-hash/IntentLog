@@ -273,6 +273,29 @@ def _readable_as_intent(entry: Any) -> bool:
         return False
 
 
+def _first_failing_position(chained: List["ChainedIntent"]) -> Optional[int]:
+    """
+    List index of the first entry that fails verification, or None.
+
+    This is where 'ilog chain migrate --force' starts rebuilding. It is a
+    list position, unlike ChainVerificationResult.broken_at, which is the
+    stored sequence number.
+    """
+    from .merkle import GENESIS_HASH, compute_chain_hash, compute_intent_content_hash
+
+    expected_prev = GENESIS_HASH
+    for i, entry in enumerate(chained):
+        if (
+            not entry.chain_hash
+            or compute_intent_content_hash(entry.intent) != entry.intent_hash
+            or entry.prev_hash != expected_prev
+            or compute_chain_hash(entry.intent_hash, entry.prev_hash) != entry.chain_hash
+        ):
+            return i
+        expected_prev = entry.chain_hash
+    return None
+
+
 # Fields only a hash-chained entry carries ("hash" is in the legacy format too)
 _CHAIN_FIELDS = ("chain_hash", "intent_hash", "prev_hash", "sequence", "signature")
 
@@ -1150,19 +1173,16 @@ class IntentLogStorage:
 
             # Load existing chain
             chained_intents = self.load_chained_intents(locked_branch)
-            damaged = [c.sequence for c in chained_intents if not c.chain_hash]
+            damaged = [i for i, c in enumerate(chained_intents) if not c.chain_hash]
             if damaged:
-                from .merkle import verify_chain
-
-                first_break = verify_chain(chained_intents).broken_at
-                if first_break is None:
-                    first_break = damaged[0]
+                first_break = _first_failing_position(chained_intents)
                 raise ChainIntegrityError(
-                    f"Branch '{locked_branch}' has entries without chain data "
-                    f"(position {damaged[0]}). Run 'ilog chain verify --branch {locked_branch}' "
-                    f"for details; 'ilog chain migrate --force --branch {locked_branch}' rebuilds "
-                    f"the chain from the first entry that fails verification (position "
-                    f"{first_break}) and removes the signatures from there on"
+                    f"Branch '{locked_branch}' has entries without chain data or that "
+                    f"cannot be read (position {damaged[0]}). Run 'ilog chain verify "
+                    f"--branch {locked_branch}' for details; 'ilog chain migrate --force "
+                    f"--branch {locked_branch}' rebuilds the chain from position "
+                    f"{first_break}, dropping entries that cannot be read and removing "
+                    "the signatures from there on"
                 )
 
             # Append to chain
@@ -1251,17 +1271,25 @@ class IntentLogStorage:
         if not data and branch != "main":
             raise BranchNotFoundError(f"Branch '{branch}' not found")
         if _is_chained_data(data):
-            # Unreadable entries are broken placeholders here, so verification
-            # reports the first problem of any kind, by position
-            result = self.verify_chain(branch)
-            if not result.valid:
+            # Unreadable entries are broken placeholders here, at their own
+            # position, so the first failing position covers every problem
+            position = _first_failing_position(self.load_chained_intents(branch))
+            if position is None:
+                return None
+            raw_entries = data.get("intents", [])
+            if position < len(raw_entries) and not _readable_as_intent(raw_entries[position]):
                 return (
-                    f"Branch '{branch}' fails chain verification at sequence "
-                    f"{result.broken_at}. Run 'ilog chain verify --branch {branch}' for "
-                    "details; 'ilog chain migrate --force' would rebuild the chain from "
-                    "there and remove the signatures from that point on"
+                    f"Branch '{branch}' has an unreadable entry at position {position}. "
+                    f"Fix the entry, or run 'ilog chain migrate --force --branch {branch}' "
+                    "to drop it and rebuild the chain from there, removing the signatures "
+                    "from that point on"
                 )
-            return None
+            return (
+                f"Branch '{branch}' fails chain verification at position {position}. Run "
+                f"'ilog chain verify --branch {branch}' for details; 'ilog chain migrate "
+                f"--force --branch {branch}' would rebuild the chain from there and remove "
+                "the signatures from that point on"
+            )
         for i, entry in enumerate(data.get("intents", [])):
             if not _readable_as_intent(entry):
                 return (
