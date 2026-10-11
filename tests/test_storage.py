@@ -1507,6 +1507,8 @@ class TestRoundTwelveFixes:
         {"branch": "main", "intents": None},
         [{"intent_id": "a", "intent_name": "n", "intent_reasoning": "r", "timestamp": "2024-01-01T10:00:00"}],
         "junk",
+        {"branch": "main"},
+        {"branch": "main", "entries": [{"intent_id": "a", "intent_name": "n", "intent_reasoning": "r"}]},
     ]
 
     @pytest.mark.parametrize("content", MALFORMED)
@@ -1532,6 +1534,53 @@ class TestRoundTwelveFixes:
                 operation()
 
         assert json.loads(path.read_text()) == content
+
+
+class TestRoundThirteenFixes:
+    """Files that are not valid JSON are refused with a message naming them."""
+
+    UNPARSEABLE = {
+        "empty": b"",
+        "truncated": b'{"branch": "main", "intents": [{"intent_id": "a"',
+        "conflict": b'<<<<<<< HEAD\n{"intents": []}\n=======\n{"intents": []}\n>>>>>>> other\n',
+        "bom": b'\xef\xbb\xbf{"branch": "main", "intents": []}',
+        "bad_utf8": b'{"branch": "main", "intents": [], "x": "\xff"}',
+        "deep": b"[" * 100000 + b"]" * 100000,
+    }
+
+    @pytest.mark.parametrize("name", sorted(UNPARSEABLE))
+    def test_unparseable_branch_file_is_refused_and_kept(self, initialized_project, name):
+        storage = initialized_project
+        path = storage._get_branch_file("main")
+        path.write_bytes(self.UNPARSEABLE[name])
+        operations = [
+            storage.load_intents,
+            storage.load_chained_intents,
+            storage.verify_chain,
+            storage.check_branch_integrity,
+            lambda: storage.save_intents([Intent(intent_name="n", intent_reasoning="r")], strict=False),
+            lambda: storage.add_chained_intent("n", "r"),
+            lambda: storage.migrate_to_chain(force=True),
+        ]
+
+        for operation in operations:
+            with pytest.raises(StorageError, match="intents.json is not valid JSON"):
+                operation()
+
+        assert path.read_bytes() == self.UNPARSEABLE[name]
+
+    @pytest.mark.parametrize("content", [b"", b"<<<<<<< HEAD\n{}\n=======\n{}\n>>>>>>> x\n", b"[]"])
+    def test_broken_config_names_a_working_repair(self, initialized_project, content):
+        storage = initialized_project
+        storage.add_chained_intent("a", "kept")
+        storage.config_path.write_bytes(content)
+
+        with pytest.raises(StorageError, match="config.json .*delete it and run 'ilog init'"):
+            storage.load_config()
+
+        storage.config_path.unlink()
+        storage.init_project("recovered")
+        assert [i.intent_name for i in storage.load_intents()] == ["a"]
 
 
 class TestBranchNamesOnEveryPath:

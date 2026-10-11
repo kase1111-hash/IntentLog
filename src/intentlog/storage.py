@@ -316,17 +316,34 @@ def _is_chained_data(data: Dict[str, Any]) -> bool:
     )
 
 
+_RESTORE_HINT = "Fix the file or restore it from a backup"
+
+
+def _load_json_file(path: Path, hint: str = _RESTORE_HINT) -> Any:
+    """
+    Parse a JSON file under .intentlog/, reporting a file that cannot be
+    parsed (empty, truncated, merge conflict markers, invalid UTF-8, nesting
+    too deep) as a StorageError naming it, followed by ``hint``.
+    """
+    try:
+        with open(path) as f:
+            return json.load(f)
+    except (ValueError, RecursionError) as e:
+        raise StorageError(f"{path} is not valid JSON ({e}). {hint}") from e
+
+
 def _validated_branch_data(data: Any, branch_file: Path) -> Dict[str, Any]:
     """
     Return a branch file's parsed JSON, refusing anything that is not branch
-    data: a top level other than an object, or 'intents' other than a list.
-    Such a file cannot be read entry by entry, so it is never treated as
-    empty (a write would then replace it) or partly readable.
+    data: a top level other than an object, or no 'intents' list. Such a
+    file cannot be read entry by entry, so it is never treated as empty (a
+    write would then replace it) or partly readable. Every IntentLog version
+    writes the 'intents' key.
     """
-    if not isinstance(data, dict) or not isinstance(data.get("intents", []), list):
+    if not isinstance(data, dict) or not isinstance(data.get("intents"), list):
         raise StorageError(
             f"{branch_file} is not valid branch data (expected a JSON object "
-            "with an 'intents' list). Fix the file or restore it from a backup"
+            f"with an 'intents' list). {_RESTORE_HINT}"
         )
     return data
 
@@ -535,15 +552,20 @@ class IntentLogStorage:
 
         Raises:
             ProjectNotFoundError: If project not initialized
+            StorageError: If config.json is not a JSON object
         """
         if not self.is_initialized():
             raise ProjectNotFoundError(
                 "No IntentLog project found. Run 'ilog init' first."
             )
 
-        with open(self.config_path) as f:
-            data = json.load(f)
-
+        hint = (
+            "Fix the file, or delete it and run 'ilog init' to recreate it "
+            "(intents are kept; settings such as the current branch are reset)"
+        )
+        data = _load_json_file(self.config_path, hint)
+        if not isinstance(data, dict):
+            raise StorageError(f"{self.config_path} is not a valid configuration (expected a JSON object). {hint}")
         return ProjectConfig.from_dict(data)
 
     def save_config(self, config: ProjectConfig) -> None:
@@ -573,9 +595,7 @@ class IntentLogStorage:
                 return []
             raise BranchNotFoundError(f"Branch '{branch}' not found")
 
-        with self._lock_file(branch_file, exclusive=False):
-            with open(branch_file) as f:
-                data = _validated_branch_data(json.load(f), branch_file)
+        data = self._read_branch_data(branch_file)
 
         intents = []
         for intent_data in data.get("intents", []):
@@ -682,8 +702,7 @@ class IntentLogStorage:
         if not branch_file.is_file():
             return {}
         with self._lock_file(branch_file, exclusive=False):
-            with open(branch_file) as f:
-                data = json.load(f)
+            data = _load_json_file(branch_file)
         return _validated_branch_data(data, branch_file)
 
     def _rechain_preserving(
@@ -1044,9 +1063,7 @@ class IntentLogStorage:
                 return []
             raise BranchNotFoundError(f"Branch '{branch}' not found")
 
-        with self._lock_file(branch_file, exclusive=False):
-            with open(branch_file) as f:
-                data = _validated_branch_data(json.load(f), branch_file)
+        data = self._read_branch_data(branch_file)
 
         branch_is_chained = _is_chained_data(data)
         chained = []

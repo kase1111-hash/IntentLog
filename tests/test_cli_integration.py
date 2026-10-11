@@ -656,6 +656,21 @@ class TestDamagedChainCommands:
             assert "Traceback" not in result.stdout + result.stderr
         assert source.read_text() == content
 
+    @pytest.mark.parametrize("name", ["intents.json", "config.json"])
+    def test_merge_conflict_markers_are_reported_not_crashed(self, temp_project_dir, name):
+        run_ilog("init", "test-project")
+        run_ilog("commit", "first")
+        path = temp_project_dir / ".intentlog" / name
+        content = "<<<<<<< HEAD\n{}\n=======\n{}\n>>>>>>> other\n"
+        path.write_text(content)
+
+        for args in (("log",), ("commit", "x"), ("chain", "verify"), ("tag", "x", "t")):
+            result = run_ilog(*args)
+            assert result.returncode == 1, args
+            assert f"{name} is not valid JSON" in result.stdout, result.stdout
+            assert "Traceback" not in result.stdout + result.stderr
+        assert path.read_text() == content
+
     def test_chain_migrate_on_damaged_branch_needs_force(self, temp_project_dir):
         run_ilog("init", "test-project")
         run_ilog("commit", "first")
