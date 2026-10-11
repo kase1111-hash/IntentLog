@@ -63,8 +63,16 @@ def main():
         parser.print_help()
         sys.exit(0)
 
-    # Execute the command
-    args.func(args)
+    # Execute the command. Commands report the errors they expect; any
+    # other storage error (such as a malformed branch file) is reported the
+    # same way instead of as a traceback.
+    from ..storage import StorageError
+
+    try:
+        args.func(args)
+    except StorageError as e:
+        print(f"Error: {e}")
+        sys.exit(1)
 
 
 __all__ = [

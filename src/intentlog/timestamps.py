@@ -25,12 +25,33 @@ _EXTENDED = re.compile(
 _FRACTION = re.compile(r"(?<=:[0-9]{2})[.,](\d+)$")
 
 # Forms that supported Python versions disagree on, refused everywhere: an
-# empty fraction ('10:00:45.+00:00', rejected by 3.13 only), anything after a
-# 'Z' (accepted before 3.11), and an offset followed by a fraction
-# ('+00:00.5', which 3.11 and 3.12 read without the fraction and 3.13 with
-# it). The offset's sign is looked for only past the date, whose own '-'
-# separators it must not match.
-_INCONSISTENT = re.compile(r"[.,](?![0-9])|Z.|(?<=.{11})[+-][0-9]{2}(?::?[0-9]{2}){0,2}[.,]")
+# empty fraction ('10:00:45.+00:00', rejected by 3.13 only) and anything
+# after a 'Z' (accepted before 3.11)
+_INCONSISTENT = re.compile(r"[.,](?![0-9])|Z.", re.DOTALL)
+
+# What may follow the sign of a UTC offset: hours, then optional minutes and
+# seconds, each optionally after a ':'
+_OFFSET_FIELDS = re.compile(r"[0-9]{2}(?::?[0-9]{2}){0,2}")
+_SIGN = re.compile(r"[+-]")
+
+
+def _offset_has_extra_part(value: str) -> bool:
+    """
+    Whether a UTC offset in the value is followed by anything, such as a
+    fraction ('+00:00.5', '+00:00:00:5', '+000000123456').
+
+    Versions read such a value differently: 3.11 and 3.12 drop the fraction
+    of a zero offset, 3.8-3.12 drop one written after ':', and 3.13 keeps
+    both.
+
+    The offset starts at the first sign in the time, as fromisoformat()
+    looks for it. Signs before index 11 (extended dates) or 9 (basic
+    dates) are the date's own separators or the date-time separator; a
+    time with an offset sign there would have fewer than two hour digits.
+    """
+    start = 11 if value[4:5] == "-" else 9
+    sign = _SIGN.search(value, start)
+    return sign is not None and not _OFFSET_FIELDS.fullmatch(value, sign.end())
 
 
 def _as_python38_isoformat(value: str) -> Optional[str]:
@@ -67,8 +88,8 @@ def parse_iso_datetime(value: str) -> datetime:
     different interpreters:
 
     - Forms the supported versions disagree on are refused everywhere: an
-      empty fraction, anything after a 'Z', and an offset followed by a
-      fraction.
+      empty fraction, anything after a 'Z', and anything after a UTC
+      offset's hours, minutes and seconds, such as a fraction.
     - Before Python 3.11, an extended-format value fromisoformat() rejects
       there (a 'Z' suffix, a ',' decimal, or a fraction that is not 3 or 6
       digits long) is rewritten to the equivalent form it accepts.
@@ -81,13 +102,20 @@ def parse_iso_datetime(value: str) -> datetime:
         ValueError: If the value is not a valid timestamp
         TypeError: If the value is not a string
     """
-    if isinstance(value, str) and _INCONSISTENT.search(value):
+    if isinstance(value, str) and (_INCONSISTENT.search(value) or _offset_has_extra_part(value)):
         raise ValueError(f"Invalid isoformat string: {value!r}")
     try:
-        return datetime.fromisoformat(value)
+        result = datetime.fromisoformat(value)
     except ValueError:
+        rewritten = None
         if sys.version_info < (3, 11) and isinstance(value, str):
             rewritten = _as_python38_isoformat(value)
-            if rewritten is not None and rewritten != value:
-                return datetime.fromisoformat(rewritten)
-        raise
+        if rewritten is None or rewritten == value:
+            raise
+        result = datetime.fromisoformat(rewritten)
+    # Backstop: an offset with a sub-second part is never read the same way
+    # everywhere, whatever form produced it
+    offset = result.utcoffset()
+    if offset is not None and offset.microseconds:
+        raise ValueError(f"Invalid isoformat string: {value!r}")
+    return result

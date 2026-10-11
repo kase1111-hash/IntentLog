@@ -316,6 +316,21 @@ def _is_chained_data(data: Dict[str, Any]) -> bool:
     )
 
 
+def _validated_branch_data(data: Any, branch_file: Path) -> Dict[str, Any]:
+    """
+    Return a branch file's parsed JSON, refusing anything that is not branch
+    data: a top level other than an object, or 'intents' other than a list.
+    Such a file cannot be read entry by entry, so it is never treated as
+    empty (a write would then replace it) or partly readable.
+    """
+    if not isinstance(data, dict) or not isinstance(data.get("intents", []), list):
+        raise StorageError(
+            f"{branch_file} is not valid branch data (expected a JSON object "
+            "with an 'intents' list). Fix the file or restore it from a backup"
+        )
+    return data
+
+
 class IntentLogStorage:
     """
     Manages persistent storage for IntentLog projects.
@@ -560,7 +575,7 @@ class IntentLogStorage:
 
         with self._lock_file(branch_file, exclusive=False):
             with open(branch_file) as f:
-                data = json.load(f)
+                data = _validated_branch_data(json.load(f), branch_file)
 
         intents = []
         for intent_data in data.get("intents", []):
@@ -669,7 +684,7 @@ class IntentLogStorage:
         with self._lock_file(branch_file, exclusive=False):
             with open(branch_file) as f:
                 data = json.load(f)
-        return data if isinstance(data, dict) else {}
+        return _validated_branch_data(data, branch_file)
 
     def _rechain_preserving(
         self,
@@ -1031,7 +1046,7 @@ class IntentLogStorage:
 
         with self._lock_file(branch_file, exclusive=False):
             with open(branch_file) as f:
-                data = json.load(f)
+                data = _validated_branch_data(json.load(f), branch_file)
 
         branch_is_chained = _is_chained_data(data)
         chained = []

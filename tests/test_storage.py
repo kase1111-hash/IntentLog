@@ -26,6 +26,7 @@ from intentlog.storage import (
     ProjectExistsError,
     ProjectNotFoundError,
     SignatureLossError,
+    StorageError,
     compute_intent_hash,
     find_project_root,
 )
@@ -1454,6 +1455,83 @@ class TestRoundElevenFixes:
 
         with pytest.raises(ChainIntegrityError, match="rebuilds the chain from position 1"):
             storage.add_chained_intent("e", "refused")
+
+
+class TestRoundTwelveFixes:
+    """Nothing may follow a UTC offset; malformed branch files are refused."""
+
+    @pytest.mark.parametrize(
+        "value",
+        [
+            "2024-01-01T10:00:45+00:00:00:000001",  # ':' before the fraction
+            "2024-01-01T10:00:00+00:00:00:5",
+            "2024-01-01T10:00:45+000000123456",  # no separator at all
+            "2024W01T10+00:00.5",  # 7-character week date
+            "2024-01-01\n10-00:00:00.000001",  # newline as date-time separator
+            "2024-01-01T10:00:00+00:00\x00",  # 3.11+ stop reading at a NUL
+            "2024W01T10+00:00:00.0",
+            "2024-01-01T10:00:00+00:00 ",
+        ],
+    )
+    def test_anything_after_an_offset_is_refused(self, value):
+        from intentlog.timestamps import parse_iso_datetime
+
+        with pytest.raises(ValueError):
+            parse_iso_datetime(value)
+
+    @pytest.mark.parametrize("seconds", [0, 1, -1, 30, 19800, -19800, -37815, 50400, -50400])
+    @pytest.mark.parametrize("microsecond", [0, 1, 123456, 999999])
+    def test_isoformat_output_round_trips(self, seconds, microsecond):
+        from datetime import timedelta, timezone
+
+        from intentlog.timestamps import parse_iso_datetime
+
+        value = datetime(2024, 1, 1, 10, 0, 45, microsecond, tzinfo=timezone(timedelta(seconds=seconds)))
+        for text in (value.isoformat(), value.isoformat(" "), value.replace(tzinfo=None).isoformat()):
+            parsed = parse_iso_datetime(text)
+            assert parsed.isoformat() == datetime.fromisoformat(text).isoformat()
+
+    def test_sub_second_offset_is_refused(self):
+        from datetime import timedelta, timezone
+
+        from intentlog.timestamps import parse_iso_datetime
+
+        value = datetime(2024, 1, 1, 10, 0, 45, tzinfo=timezone(timedelta(seconds=19800, microseconds=5)))
+        with pytest.raises(ValueError):
+            parse_iso_datetime(value.isoformat())
+
+    MALFORMED = [
+        {"branch": "main", "chain_version": "1.0", "intents": {"0": {"intent_id": "x"}}},
+        {"branch": "main", "intents": "abc"},
+        {"branch": "main", "intents": 5},
+        {"branch": "main", "intents": None},
+        [{"intent_id": "a", "intent_name": "n", "intent_reasoning": "r", "timestamp": "2024-01-01T10:00:00"}],
+        "junk",
+    ]
+
+    @pytest.mark.parametrize("content", MALFORMED)
+    def test_malformed_branch_file_is_refused_and_kept(self, initialized_project, content):
+        storage = initialized_project
+        path = storage._get_branch_file("main")
+        path.write_text(json.dumps(content))
+        operations = [
+            storage.load_intents,
+            storage.load_chained_intents,
+            storage.verify_chain,
+            storage.check_branch_integrity,
+            lambda: storage.save_intents([Intent(intent_name="n", intent_reasoning="r")]),
+            lambda: storage.save_intents([Intent(intent_name="n", intent_reasoning="r")], strict=False),
+            lambda: storage.add_intent("n", "r", force=True),
+            lambda: storage.add_chained_intent("n", "r"),
+            lambda: storage.migrate_to_chain(force=True),
+            lambda: storage.create_branch("copy"),
+        ]
+
+        for operation in operations:
+            with pytest.raises(StorageError, match="not valid branch data"):
+                operation()
+
+        assert json.loads(path.read_text()) == content
 
 
 class TestBranchNamesOnEveryPath:

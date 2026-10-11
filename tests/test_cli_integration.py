@@ -642,6 +642,20 @@ class TestDamagedChainCommands:
         result = run_ilog("merge", "feat", "--force")
         assert result.returncode == 0, result.stdout
 
+    def test_malformed_merge_source_is_reported_not_crashed(self, temp_project_dir):
+        run_ilog("init", "test-project")
+        run_ilog("commit", "first")
+        source = temp_project_dir / ".intentlog" / "branches" / "feat.json"
+        content = '{"branch": "feat", "chain_version": "1.0", "intents": {"0": {}}}'
+        source.write_text(content)
+
+        for args in (("merge", "feat"), ("merge", "feat", "--force"), ("chain", "verify", "--branch", "feat")):
+            result = run_ilog(*args)
+            assert result.returncode == 1, args
+            assert "not valid branch data" in result.stdout
+            assert "Traceback" not in result.stdout + result.stderr
+        assert source.read_text() == content
+
     def test_chain_migrate_on_damaged_branch_needs_force(self, temp_project_dir):
         run_ilog("init", "test-project")
         run_ilog("commit", "first")
