@@ -433,7 +433,8 @@ class IntentLogStorage:
 
         Args:
             project_name: Name for the project
-            force: If True, reinitialize existing project
+            force: If True, reinitialize existing project, resetting the
+                main branch. Without it, intents already on disk are kept.
 
         Returns:
             ProjectConfig for the new project
@@ -464,9 +465,13 @@ class IntentLogStorage:
         config = ProjectConfig(project_name=project_name)
         _atomic_write_json(self.config_path, config.to_dict())
 
-        # Create empty main branch intents
+        # Create empty main branch intents. Without force, intents already on
+        # disk (for example after config.json went missing) are kept.
         main_intents_path = self._get_branch_file("main")
-        _atomic_write_json(main_intents_path, {"intents": [], "branch": "main"})
+        if force or not main_intents_path.exists():
+            _atomic_write_json(main_intents_path, {"intents": [], "branch": "main"})
+        else:
+            logger.info("Keeping existing intents", path=str(main_intents_path))
 
         # Create .gitignore for sensitive data
         gitignore_path = self.intentlog_dir / ".gitignore"
@@ -1147,11 +1152,17 @@ class IntentLogStorage:
             chained_intents = self.load_chained_intents(locked_branch)
             damaged = [c.sequence for c in chained_intents if not c.chain_hash]
             if damaged:
+                from .merkle import verify_chain
+
+                first_break = verify_chain(chained_intents).broken_at
+                if first_break is None:
+                    first_break = damaged[0]
                 raise ChainIntegrityError(
                     f"Branch '{locked_branch}' has entries without chain data "
                     f"(position {damaged[0]}). Run 'ilog chain verify --branch {locked_branch}' "
                     f"for details; 'ilog chain migrate --force --branch {locked_branch}' rebuilds "
-                    "the chain from that point"
+                    f"the chain from the first entry that fails verification (position "
+                    f"{first_break}) and removes the signatures from there on"
                 )
 
             # Append to chain
@@ -1239,18 +1250,23 @@ class IntentLogStorage:
         data = self._read_branch_data(self._get_branch_file(branch))
         if not data and branch != "main":
             raise BranchNotFoundError(f"Branch '{branch}' not found")
+        if _is_chained_data(data):
+            # Unreadable entries are broken placeholders here, so verification
+            # reports the first problem of any kind, by position
+            result = self.verify_chain(branch)
+            if not result.valid:
+                return (
+                    f"Branch '{branch}' fails chain verification at sequence "
+                    f"{result.broken_at}. Run 'ilog chain verify --branch {branch}' for "
+                    "details; 'ilog chain migrate --force' would rebuild the chain from "
+                    "there and remove the signatures from that point on"
+                )
+            return None
         for i, entry in enumerate(data.get("intents", [])):
             if not _readable_as_intent(entry):
                 return (
                     f"Branch '{branch}' has an unreadable entry at position {i}. Fix the "
                     f"entry, or run 'ilog chain migrate --force --branch {branch}' to drop it"
-                )
-        if _is_chained_data(data):
-            result = self.verify_chain(branch)
-            if not result.valid:
-                return (
-                    f"Branch '{branch}' fails chain verification at sequence "
-                    f"{result.broken_at}. Run 'ilog chain verify --branch {branch}' for details"
                 )
         return None
 

@@ -11,12 +11,17 @@ from datetime import datetime
 from typing import Optional
 
 # Extended-format ISO 8601 date-time: date, any separator, time with an
-# optional fraction ('.' or ','), then an optional zone ('Z' or an offset)
+# optional fraction ('.' or ','), then an optional zone ('Z' or an offset).
+# The fields are ASCII digits, as Python 3.11+ requires. A fraction is 1-5
+# ASCII digits, or 6 ASCII digits followed by further digits, which 3.11+
+# truncates away (it accepts non-ASCII ones there only before a zone).
 _EXTENDED = re.compile(
-    r"(?P<base>\d{4}-\d{2}-\d{2}.\d{2}(?::\d{2}(?::\d{2}(?:[.,]\d+)?)?)?)"
-    r"(?P<zone>Z|[+-]\d{2}:\d{2})?"
+    r"(?P<base>[0-9]{4}-[0-9]{2}-[0-9]{2}.[0-9]{2}"
+    r"(?::[0-9]{2}(?::[0-9]{2}(?:[.,](?:[0-9]{1,5}|[0-9]{6}(?P<extra>\d*)))?)?)?)"
+    r"(?P<zone>Z|[+-][0-9]{2}:[0-9]{2})?"
 )
-_FRACTION = re.compile(r"[.,](\d+)$")
+# A fraction only ever follows the seconds field
+_FRACTION = re.compile(r"(?<=:[0-9]{2})[.,](\d+)$")
 
 
 def _as_python38_isoformat(value: str) -> Optional[str]:
@@ -30,6 +35,9 @@ def _as_python38_isoformat(value: str) -> Optional[str]:
     """
     match = _EXTENDED.fullmatch(value)
     if not match:
+        return None
+    extra = match.group("extra") or ""
+    if not match.group("zone") and not extra.isascii():
         return None
     base = match.group("base")
     fraction = _FRACTION.search(base)
@@ -49,8 +57,10 @@ def parse_iso_datetime(value: str) -> datetime:
     versions, an extended-format value that fromisoformat() rejects there
     (a 'Z' suffix, a ',' decimal, or a fraction that is not 3 or 6 digits
     long) is rewritten to the equivalent form those versions accept, so it
-    is read the same way everywhere. Basic-format values (no '-' or ':'
-    separators) still need Python 3.11+.
+    is read the same way everywhere. Nothing that 3.11+ rejects is ever
+    accepted. Basic-format values (no '-' or ':' separators) and a few forms
+    3.11+ tolerates (a fraction on the hour or minute field, non-digits after
+    the sixth fraction digit) still need Python 3.11+.
 
     Raises:
         ValueError: If the value is not a valid timestamp

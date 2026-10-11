@@ -1292,6 +1292,79 @@ class TestRoundNineConsistency:
             storage.save_intents(intents)
 
 
+class TestRoundTenFixes:
+    """First-problem reporting, accurate repair hints, ASCII digits, safe init."""
+
+    AR3 = "\u0663"  # ARABIC-INDIC DIGIT THREE
+
+    @pytest.mark.parametrize(
+        "value, expected",
+        [
+            # Results Python 3.11+ gives natively
+            (f"2024-01-01T10:00:00.123456{AR3}Z", "2024-01-01T10:00:00.123456+00:00"),
+            (f"2024-01-01T10:00:00.123456{AR3}", None),
+            (f"2024-01-01T10:00:00.12345{AR3}Z", None),
+            (f"2024-01-01T10:00:00.{AR3}Z", None),
+            (f"2024-01-01T10:00:0{AR3}Z", None),
+            (f"202{AR3}-01-01T10:00:00Z", None),
+        ],
+    )
+    def test_non_ascii_digits_follow_python_311(self, value, expected):
+        from intentlog.timestamps import parse_iso_datetime
+
+        if expected is None:
+            with pytest.raises(ValueError):
+                parse_iso_datetime(value)
+        else:
+            assert parse_iso_datetime(value).isoformat() == expected
+
+    @staticmethod
+    def _damaged_chain(storage):
+        for name in "abc":
+            storage.add_chained_intent(name, f"reasoning {name}")
+        path = storage._get_branch_file("main")
+        data = json.loads(path.read_text())
+        data["intents"][0]["intent_reasoning"] = "TAMPERED"
+        del data["intents"][2]["timestamp"]
+        path.write_text(json.dumps(data, indent=2))
+
+    def test_integrity_check_reports_the_first_problem(self, initialized_project):
+        storage = initialized_project
+        self._damaged_chain(storage)
+
+        problem = storage.check_branch_integrity()
+
+        assert "fails chain verification at sequence 0" in problem
+        assert "remove the signatures" in problem
+        assert "to drop it" not in problem
+
+    def test_commit_hint_names_the_real_rebuild_point(self, initialized_project):
+        storage = initialized_project
+        self._damaged_chain(storage)
+
+        with pytest.raises(ChainIntegrityError, match=r"fails verification \(position 0\)"):
+            storage.add_chained_intent("d", "refused")
+
+    def test_init_without_force_keeps_existing_intents(self, initialized_project):
+        storage = initialized_project
+        storage.add_chained_intent("a", "kept")
+        before = _branch_data(storage)
+        storage.config_path.unlink()
+
+        storage.init_project("recovered")
+
+        assert _branch_data(storage) == before
+        assert storage.load_config().project_name == "recovered"
+
+    def test_init_with_force_still_resets(self, initialized_project):
+        storage = initialized_project
+        storage.add_chained_intent("a", "reset")
+
+        storage.init_project("fresh", force=True)
+
+        assert storage.load_intents() == []
+
+
 class TestBranchNamesOnEveryPath:
     @pytest.mark.parametrize("name", ["../escape", "../../x", "a/b", "bad name"])
     def test_invalid_names_are_not_found_and_create_nothing(self, initialized_project, name):
